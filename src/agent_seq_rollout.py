@@ -41,6 +41,15 @@ class SeqRolloutAgent(Agent):
     ) -> int:
         best_action, action_q_values = self.act_with_info(obs, prev_actions)
         return best_action
+    
+    def act_forOnlineReplan(
+            self,
+            obs: List[float],
+            prev_actions: Dict[int, int] = None,
+            **kwargs,
+    ) -> int:
+        best_action, action_q_values = self.act_with_info(obs, prev_actions)
+        return best_action,action_q_values
 
     def act_with_info1(
             ## with pralallel processing

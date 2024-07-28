@@ -330,6 +330,7 @@ def learn_policy():
                 # x = np.concatenate((obs, agent_ohe, prev_actions_ohe))
 
                 x = convert_to_x(obs, m_agents, agent_id, action_space, prev_actions)
+                
                 samples.append((x, q_values))
 
                 # TODO sanity check
@@ -349,6 +350,7 @@ def learn_policy():
             frames.append(imgs)
 
             # update rollout policy with samples
+            import ipdb; ipdb.set_trace()
             qnet = train_qnet(qnet, samples)
 
     env.close()
@@ -363,4 +365,4 @@ def learn_policy():
 
 if __name__ == '__main__':
     frames = learn_policy()
-    create_movie_clip(frames, 'onlinePolicyIteration.mp4', fps=10) 
+    # create_movie_clip(frames, 'onlinePolicyIteration.mp4', fps=10) 

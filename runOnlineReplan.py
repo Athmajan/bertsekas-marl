@@ -40,18 +40,99 @@ FROM_SCRATCH = False
 INPUT_QNET_NAME = RepeatedRolloutModelPath_10x10_4v4
 BASIS_POLICY_AGENT = AgentType.QNET_BASED
 QNET_TYPE = QnetType.BASELINE
+BASIS_AGENT_TYPE = AgentType.RULE_BASED
+
+
+def convert_to_x(obs, m_agents, agent_id, action_space, prev_actions):
+    # state
+    obs_first = np.array(obs, dtype=np.float32).flatten()
+
+    # agent ohe
+    agent_ohe = np.zeros(shape=(m_agents,), dtype=np.float32)
+    agent_ohe[agent_id] = 1.
+
+    # prev actions
+    prev_actions_ohe = np.zeros(shape=(m_agents * action_space.n,), dtype=np.float32)
+    for agent_i, action_i in prev_actions.items():
+        ohe_action_index = int(agent_i * action_space.n) + action_i
+        prev_actions_ohe[ohe_action_index] = 1.
+
+    # combine all
+    x = np.concatenate((obs_first, agent_ohe, prev_actions_ohe))
+
+    return x
+
+
+
+def getSignallingPolicy(net,obs,m_agents,agent_i,prev_actions,action_space):
+    agent_ohe = np.zeros(shape=(m_agents,), dtype=np.float32)
+    agent_ohe[agent_i] = 1.
+    prev_actions_ohe = np.zeros(shape=(m_agents * action_space.n,), dtype=np.float32)
+    if agent_i in prev_actions:
+        ohe_action_index = int(agent_i * action_space.n) + prev_actions[agent_i]
+        prev_actions_ohe[ohe_action_index] = 1.
+
+    obs_first = np.array(obs, dtype=np.float32).flatten()
+    x = np.concatenate((obs_first, agent_ohe, prev_actions_ohe))
+    xTensor = torch.Tensor(x).view((1,-1))
+    best_action = net(xTensor).max(-1)[-1].detach().item()
+    return best_action
+
+def getBasePolicy(obs,agent):
+    action_id, _ = agent.act_with_info(obs)
+    return {agent.id:action_id}
 
 
 
 
-N_SIMS = 10
-EPOCHS = 30
+
+def train_qnet(qnet, samples):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    qnet.train()
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(qnet.parameters(), lr=0.01)
+    data_loader = torch.utils.data.DataLoader(samples,
+                                              batch_size=BATCH_SIZE,
+                                              shuffle=True)
+
+    for epoch in range(EPOCHS):  # loop over the dataset multiple times
+        running_loss = .0
+        n_batches = 0
+
+        for data in data_loader:
+            inputs, labels = data[0].to(device), data[1].to(device)
+            optimizer.zero_grad()
+            outputs = qnet(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            # logging
+            running_loss += loss.item()
+            n_batches += 1
+
+        print(f'[{epoch}] {running_loss / n_batches:.3f}.')
+
+    return qnet
 
 
+def main(
+        wandblog, 
+        wandbName,
+        num_episodes,
+        replanEvery,
+        wandbProj="SecurityAndSurveillance",
+        
+         ):
 
-
-if __name__ == '__main__':
-
+    steps_history = []
+    steps_num = 0
+    if wandblog :
+        wandb.init(project=wandbProj,name=wandbName)
+    
+    _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
     net.load_state_dict(torch.load(INPUT_QNET_NAME))
@@ -59,8 +140,156 @@ if __name__ == '__main__':
     net.eval()
 
     env = gym.make(SpiderAndFlyEnv)
-    obs_n = env.reset()
 
+    retainCounter = 0
+    samplesForTraining = []
+
+    for epi in range(num_episodes):
+        # get episode start time
+        startTime = time.time()
+        # capture episide frames
+        frames = []
+        # count steps in an episode
+        epi_steps = 0
+
+        # collect total reward of an episode
+        total_reward = 0
+
+
+        obs_n = env.reset()
+        frames.append(env.render())
+
+        m_agents = env.n_agents
+        p_preys = env.n_preys
+        grid_shape = env._grid_shape
+        action_space = env.action_space[0]
+
+        done_n = [False] * m_agents
+
+        while not all(done_n):
+
+            # Query Signalling policy from network eval
+            
+            prev_actions = {}
+            act_n_signalling = []
+            
+            with ThreadPoolExecutor(max_workers=_n_workers) as executor:
+                futures = [
+                    executor.submit(getSignallingPolicy, net, obs, m_agents, agent_i, prev_actions, action_space)
+                    for agent_i, obs in enumerate(obs_n)
+                ]
+
+                for future in as_completed(futures):
+                    act_n_signalling.append(future.result())
+           
+            act_n_signalling_dict = {}
+            for i in range(len(act_n_signalling)):
+                act_n_signalling_dict[i] = act_n_signalling[i]
+            # print(act_n_signalling)
+
+            
+            '''
+            clearing the role of agents. No need of rule based agents anymore
+            we need to work with parallel computations where consequetive agent actions are decided 
+            based on rules and the receding agents actions are decided based on the signalling policy.
+            This should be just a clone of the role of a sequential rollout agent where the previous actions
+            are replaced with the signalling policy than waiting for each agent to communicate.
+
+            Sequential rollout agents are written already to take the future actions to be base policy.
+            So only need to give them the previous actions using the signaling policy.
+            '''
+
+
+            agents = [SeqRolloutAgent(
+                agent_i, 
+                m_agents, 
+                p_preys, 
+                grid_shape, 
+                env.action_space[agent_i],
+                n_sim_per_step=N_SIMS, 
+                basis_agent_type=BASIS_AGENT_TYPE, 
+                qnet_type=QNET_TYPE,
+                ) for agent_i in range(m_agents)]
+            
+            act_n = []
+            for i, (agent, obs) in enumerate(zip(agents, obs_n)):
+                # here initially doing sequentially.
+                # should optimize this further by parallelly
+                # comupting actions for all agents at once.
+                prev_actions = {}
+                for j, (_) in enumerate(zip(agents)):
+                    if i > j :
+                        prev_actions[j] = act_n_signalling_dict[j]
+
+                # at this point the agent is optimizing and producing the optimal action
+                action_id,action_q_values = agent.act_forOnlineReplan(obs, prev_actions=prev_actions)
+
+                act_n.append(action_id)
+
+
+
+                x = convert_to_x(obs, m_agents, i, action_space, prev_actions)
+                
+                samplesForTraining.append((x, action_q_values))
+
+         
+
+            obs_n, reward_n, done_n, info = env.step(act_n)
+            epi_steps += 1
+            steps_num += 1
+            total_reward += np.sum(reward_n)
+            frames.append(env.render())
+        # end of an episode. capture time    
+        endTime = time.time()
+        print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
+        if wandblog :
+            time.sleep(6)
+            wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime-6},step=epi) 
+        steps_history.append(epi_steps)
+
+        if (epi+1) % 10 ==0 and wandblog:
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+
+        retainCounter += 1
+        if retainCounter > replanEvery:
+            print(f"I am going to retrain at {epi} th episode")
+            net = train_qnet(net, samplesForTraining)
+            print("end of training")
+            retainCounter = 0
+            samplesForTraining = []
+            net.eval()
+
+
+    if wandblog :
+        wandb.finish()
+    env.close()
+
+
+
+N_SIMS = 10
+EPOCHS = 30
+RETRAIN = 10
+
+
+if __name__ == '__main__':
+    main(
+        wandblog = True,
+        wandbName = "AutoRollout_onlinereplan_10",
+        num_episodes = EPOCHS,
+        replanEvery = RETRAIN,
+    )
     
+    
+    
+    
+
+
+
+                
+                
+
+     
+
+
 
 
