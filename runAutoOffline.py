@@ -40,6 +40,8 @@ FROM_SCRATCH = False
 INPUT_QNET_NAME = RepeatedRolloutModelPath_10x10_4v4
 BASIS_POLICY_AGENT = AgentType.QNET_BASED
 QNET_TYPE = QnetType.BASELINE
+BASIS_AGENT_TYPE = AgentType.RULE_BASED
+
 
 def convert_to_x(obs, m_agents, agent_id, action_space, prev_actions):
     # state
@@ -191,7 +193,7 @@ EPOCHS = 30
 if __name__ == '__main__':
     steps_history = []
     steps_num = 0
-    wandb.init(project="SecurityAndSurveillance",name="AutoRollout_Off")
+    wandb.init(project="SecurityAndSurveillance",name="AutoRollout_Off_Optimized")
     
     _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -227,8 +229,10 @@ if __name__ == '__main__':
         while not all(done_n):
 
             # Query Signalling policy from network eval
+            
             prev_actions = {}
             act_n_signalling = []
+            
             with ThreadPoolExecutor(max_workers=_n_workers) as executor:
                 futures = [
                     executor.submit(getSignallingPolicy, net, obs, m_agents, agent_i, prev_actions, action_space)
@@ -237,64 +241,62 @@ if __name__ == '__main__':
 
                 for future in as_completed(futures):
                     act_n_signalling.append(future.result())
-
+           
+            act_n_signalling_dict = {}
+            for i in range(len(act_n_signalling)):
+                act_n_signalling_dict[i] = act_n_signalling[i]
             # print(act_n_signalling)
 
+            
+            '''
+            clearing the role of agents. No need of rule based agents anymore
+            we need to work with parallel computations where consequetive agent actions are decided 
+            based on rules and the receding agents actions are decided based on the signalling policy.
+            This should be just a clone of the role of a sequential rollout agent where the previous actions
+            are replaced with the signalling policy than waiting for each agent to communicate.
 
-            # Query base policy from base policy (Rule Based)
-            agents = [RuleBasedAgent(i, m_agents, p_preys, grid_shape, env.action_space[i]) for i in range(m_agents)]
-
-            act_n_base = []
-            with ThreadPoolExecutor(max_workers=_n_workers) as executor:
-                futures = [
-                    executor.submit(getBasePolicy,obs,agent)
-                    for i, (agent,obs) in enumerate(zip(agents,obs_n))
-                ]
-                for future in as_completed(futures):
-                    act_n_base.append(future.result())
-
-            # print(act_n_base)
-            act_n_base2 = []
-            for agent in range(m_agents):
-                for actItem in act_n_base:
-                    if agent in actItem:
-                        act_n_base2.append(actItem[agent])
-                        break
+            Sequential rollout agents are written already to take the future actions to be base policy.
+            So only need to give them the previous actions using the signaling policy.
+            '''
 
 
-            act_auto_n = []
-            with ProcessPoolExecutor(max_workers=_n_workers) as executor_outer:
-                outer_futures = []
-                for i, (agent, obs) in enumerate(zip(agents, obs_n)):
-                    outer_futures.append(
-                        executor_outer.submit(
-                                        actwithinfo,
-                                        action_space,
-                                        _n_workers,
-                                        agent,
-                                        N_SIMS,
-                                        obs,
-                                        m_agents,
-                                        agents,
-                                        act_n_signalling,
-                                        act_n_base2,
-                                        ))
-                    
-                for future in as_completed(outer_futures):
-                    best_action = future.result()
-                    act_auto_n.append(best_action)
+            agents = [SeqRolloutAgent(
+                agent_i, 
+                m_agents, 
+                p_preys, 
+                grid_shape, 
+                env.action_space[agent_i],
+                n_sim_per_step=N_SIMS, 
+                basis_agent_type=BASIS_AGENT_TYPE, 
+                qnet_type=QNET_TYPE,
+                ) for agent_i in range(m_agents)]
+            
+            act_n = []
+            for i, (agent, obs) in enumerate(zip(agents, obs_n)):
+                # here initially doing sequentially.
+                # should optimize this further by parallelly
+                # comupting actions for all agents at once.
+                prev_actions = {}
+                for j, (_) in enumerate(zip(agents)):
+                    if i > j :
+                        prev_actions[j] = act_n_signalling_dict[j]
 
-            # print(act_auto_n)
+                action_id = agent.act(obs, prev_actions=prev_actions)
 
+                act_n.append(action_id)
 
-            obs_n, reward_n, done_n, info = env.step(act_auto_n)
+         
+
+            obs_n, reward_n, done_n, info = env.step(act_n)
             epi_steps += 1
             steps_num += 1
             total_reward += np.sum(reward_n)
             frames.append(env.render())
         # end of an episode. capture time    
         endTime = time.time()
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
+        print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
+        time.sleep(6)
+        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime-6},step=epi) 
         steps_history.append(epi_steps)
 
         if (epi+1) % 10 ==0:
