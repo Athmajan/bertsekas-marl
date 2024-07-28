@@ -93,7 +93,7 @@ if __name__ == '__main__':
         time.sleep(6)
         wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime-6},step=epi) 
         
-
+        
 
         if (epi+1) % 10 ==0:
             print("Checpoint passed")
