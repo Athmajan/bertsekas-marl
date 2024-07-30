@@ -36,6 +36,9 @@ $ python run_agent.py
 $ python run_comparison.py
 ```
 
+### Results
+Result are published below:
+[WANDB.ai](https://wandb.ai/athmajan-university-of-oulu/SecurityAndSurveillance/reports/Multiagent-Reinforcement-Learning-Rollout-and-Policy-Iteration--Vmlldzo4ODYxNDMx?accessToken=myfjbwjdmpdno7dz0ya9s4ty4f58ik9im0sqv3ki0i640qkhet8e818gffb6rw9m)
 
 ### References
 

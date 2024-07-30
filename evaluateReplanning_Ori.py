@@ -88,7 +88,7 @@ def getBasePolicy(obs,agent):
 
 
 N_SIMS = 10
-EPOCHS = 10
+EPOCHS = 1000
 
 
 
@@ -121,7 +121,7 @@ def main(modify_env,wandbLog,modelFileName):
 
     steps_num = 0
     if wandbLog:
-        wandb.init(project="Long_Surveillance",name="Autonomous_Offline")
+        wandb.init(project="Evaluate_Replanning",name=modelFileName)
         log_buffer = []
         log_interval = 50
 
@@ -134,6 +134,12 @@ def main(modify_env,wandbLog,modelFileName):
 
 
     for epi in range(EPOCHS):
+        idling_moves_even = 0
+        non_idling_moves_even = 0
+        idling_moves_odd = 0
+        non_idling_moves_odd = 0
+
+
         # get episode start time
         startTime = time.time()
         # capture episide frames
@@ -214,9 +220,36 @@ def main(modify_env,wandbLog,modelFileName):
 
                 act_n.append(action_id)
 
+
+                # log action distributions
+                if i % 2 ==0 :
+                    # agent is even. encouranged to move
+                    if action_id == 4:
+                        # idling action
+                        idling_moves_even +=1
+                    else:
+                        # non idling action
+                        non_idling_moves_even += 1 
+                    
+                else:
+                    # agent is odd. encouraged to idle
+                    if action_id == 4:
+                        # idling action
+                        idling_moves_odd += 1  
+                    else:
+                        # non idling action
+                        non_idling_moves_odd += 1 
+
+
+                    
+                    
+                
+
          
 
             obs_n, reward_n, done_n, info = env.step(act_n)
+
+            # count action distribution
             for (agentID,actionOfAgent) in enumerate(act_n):
                 actionsFreq[agentID][actionOfAgent] += 1
 
@@ -234,20 +267,18 @@ def main(modify_env,wandbLog,modelFileName):
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
 
         if wandbLog:
-            buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
-                         epi, log_buffer, log_interval)
+            wandb.log({'idle_even':idling_moves_even, 
+                       'move_even':non_idling_moves_even,
+                       'idle_odd':idling_moves_odd,
+                       'move_odd':non_idling_moves_odd,
+                       },step=epi) 
+            
 
 
-        if (epi+1) % 1000 ==0:
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
+        # if (epi+1) % 1000 ==0:
+        #     wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
 
-    if wandbLog:
-        if log_buffer:
-            for item in log_buffer:
-                wandb.log(item[0], step=item[1], commit=False)
-            wandb.log({}, commit=True)
-            log_buffer.clear()
-        wandb.finish()
+
         
     env.close()
 
@@ -256,8 +287,7 @@ def main(modify_env,wandbLog,modelFileName):
 
 
 def process_file(fileName):
-    actionsFreq = main(modify_env=False, wandbLog=False, modelFileName=fileName)
-    import ipdb; ipdb.set_trace()
+    actionsFreq = main(modify_env=False, wandbLog=True, modelFileName=fileName)
     dfactionsFreq = pd.DataFrame(actionsFreq)
     output_file = f"OfflineRunofModified_{os.path.basename(fileName)}.csv"
     dfactionsFreq.to_csv(output_file)
@@ -266,25 +296,8 @@ def process_file(fileName):
 
 if __name__ == '__main__':
     listofFiles = [RepeatedRolloutModelPath_10x10_4v4,RepeatedRolloutModelPath_10x10_4v4_MOD]
+    process_file(RepeatedRolloutModelPath_10x10_4v4)
    
-    with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_file, fileName) for fileName in listofFiles]
-        for future in futures:
-            try:
-                result = future.result()
-                print(f"Completed: {result}")
-            except Exception as exc:
-                print(f"Generated an exception: {exc}")
-
-   
-
-
-
-                
-                
-
-     
-
 
 
 
