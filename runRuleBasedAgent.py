@@ -19,8 +19,10 @@ SEED = 42
 M_AGENTS = 4
 P_PREY = 2
 
-EPOCHS = 30
+EPOCHS = 3000
 import time
+
+from changeEnv import oddEvenRewardEnv
 
 def create_movie_clip(frames: list, output_file: str, fps: int = 10):
     # Assuming all frames have the same shape
@@ -35,13 +37,19 @@ def create_movie_clip(frames: list, output_file: str, fps: int = 10):
     out.release()
 
 
+def main(modify_env,wandbLog):
+    if modify_env:
+        env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
+    else:
+        env = gym.make(SpiderAndFlyEnv)
 
-if __name__ == "__main__":
-    env = gym.make(SpiderAndFlyEnv)
     steps_history = []
     
     steps_num = 0
-    wandb.init(project="SecurityAndSurveillance",name="ManhattanDistanceRule")
+
+    if wandbLog:
+        wandb.init(project="Long_Surveillance",name="ManhattanDistanceRule_MOD")
+
     for epi in range(EPOCHS):
         startTime = time.time()
         frames = []
@@ -50,7 +58,8 @@ if __name__ == "__main__":
         frames.append(env.render())
         m_agents = env.n_agents
         p_preys = env.n_preys
-        grid_shape = env._grid_shape
+        grid_shape = (10, 10)
+        
         agents = [RuleBasedAgent(i, m_agents, p_preys, grid_shape, env.action_space[i]) for i in range(m_agents)]
 
         done_n = [False] * m_agents
@@ -71,28 +80,35 @@ if __name__ == "__main__":
                 act_n.append(action_id)
 
             obs_n, reward_n, done_n, info = env.step(act_n)
-            total_reward += np.sum(reward_n)
+            total_reward += np.mean(reward_n)
             frames.append(env.render())
 
         endTime = time.time()
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
+        if wandbLog:
+            wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
         print(f"End of {epi}'th episode with {epi_steps} steps")
         steps_history.append(epi_steps)
         
 
-        if (epi+1) % 10 ==0:
+        if (epi+1) % 1000 ==0 and wandbLog:
             print("Checpoint passed")
             # axes are (time, channel, height, width)
             # create_movie_clip(frames, f"ManhattanRuleBased_2_agents_{epi+1}.mp4", fps=10)
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
             
 
 
-    wandb.finish()
+    if wandbLog:
+        wandb.finish()
     env.close()
 
     # create_movie_clip(frames, 'ManhattanRuleBased_2_agents.mp4', fps=10)
 
             
 
+
+
+if __name__ == "__main__":
+    main(modify_env = False, wandbLog = False)
+    
         

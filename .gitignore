@@ -58,7 +58,6 @@ coverage.xml
 # Translations
 *.mo
 *.pot
-
 # Django stuff:
 *.log
 local_settings.py
@@ -166,3 +165,4 @@ dmypy.json
 
 # Files
 *.mp4
+*.csv

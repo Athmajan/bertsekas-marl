@@ -9,7 +9,7 @@ from src.constants import SpiderAndFlyEnv, AgentType
 from src.agent_rule_based import RuleBasedAgent
 from src.agent_qnet_based import QnetBasedAgent
 from src.agent import Agent
-
+from changeEnv import oddEvenRewardEnv
 
 class SeqRolloutAgent(Agent):
     def __init__(
@@ -36,19 +36,27 @@ class SeqRolloutAgent(Agent):
     def act(
             self,
             obs: List[float],
+            modFlag : bool,
             prev_actions: Dict[int, int] = None,
             **kwargs,
     ) -> int:
-        best_action, action_q_values = self.act_with_info(obs, prev_actions)
+        if modFlag:
+            best_action, action_q_values = self.act_with_info_MOD(obs, prev_actions)
+        else:
+            best_action, action_q_values = self.act_with_info(obs, prev_actions)
         return best_action
     
     def act_forOnlineReplan(
             self,
             obs: List[float],
+            modFlag : bool,
             prev_actions: Dict[int, int] = None,
             **kwargs,
     ) -> int:
-        best_action, action_q_values = self.act_with_info(obs, prev_actions)
+        if modFlag:
+            best_action, action_q_values = self.act_with_info_MOD(obs, prev_actions)
+        else:
+            best_action, action_q_values = self.act_with_info(obs, prev_actions)
         return best_action,action_q_values
 
     def act_with_info1(
@@ -162,6 +170,113 @@ class SeqRolloutAgent(Agent):
 
         # create env
         env = gym.make(SpiderAndFlyEnv)
+
+        # roll first step
+        first_step_prev_actions = dict(prev_actions)
+        first_act_n = np.empty((m_agents,), dtype=np.int8)
+        for i in range(m_agents):
+            if i in prev_actions:
+                # if ith agent's (other agents) previous action is available
+                # use it for env.step
+                first_act_n[i] = prev_actions[i]
+            elif agent_id == i:
+                # if optimization is done for me (not other agents)
+                # use my action for env.step
+                first_act_n[i] = action_id
+                first_step_prev_actions[i] = action_id
+            else:
+                # if other agents previous actions are not available
+                # assume action based on base policy
+                underlying_agent = agents[i]
+                assumed_action = underlying_agent.act(obs, prev_actions=first_step_prev_actions)
+                first_act_n[i] = assumed_action
+                first_step_prev_actions[i] = assumed_action
+
+        # run N simulations
+        avg_total_reward = 0.
+
+        for j in range(n_sims):
+            # init env from observation
+            env.reset()
+            sim_obs_n = env.reset_from(obs)
+
+            # make prescribed first step
+            sim_obs_n, sim_reward_n, sim_done_n, sim_info = env.step(first_act_n)
+            avg_total_reward += np.sum(sim_reward_n)
+
+            # run simulation
+            while not all(sim_done_n):
+                sim_act_n = []
+                sim_prev_actions = {}
+                for agent, sim_obs in zip(agents, sim_obs_n):
+                    sim_best_action = agent.act(sim_obs, prev_actions=sim_prev_actions)
+                    sim_act_n.append(sim_best_action)
+                    sim_prev_actions[agent.id] = sim_best_action
+
+                sim_obs_n, sim_reward_n, sim_done_n, sim_info = env.step(sim_act_n)
+                avg_total_reward += np.sum(sim_reward_n)
+
+        env.close()
+
+        avg_total_reward /= len(agents)
+        avg_total_reward /= n_sims
+
+        return action_id, avg_total_reward
+    
+
+    def act_with_info_MOD(
+            ## without pralallel processing
+            self,
+            obs: List[float],
+            prev_actions: Dict[int, int] = None,
+        ) -> Tuple[int, np.ndarray]:
+        assert prev_actions is not None
+
+        n_actions = self._action_space.n
+
+        # sequential calculations
+        sim_results = []
+
+        for action_id in range(n_actions):
+            # perform simulation
+            res = self._simulate_action_par_MOD(
+                self.id,
+                action_id,
+                self._n_sim_per_step,
+                obs,
+                prev_actions,
+                self._m_agents,
+                self._agents,
+            )
+            sim_results.append(res)
+
+        # analyze results of the simulation
+        np_sim_results = np.array(sim_results, dtype=np.float32)
+        np_sim_results_sorted = np_sim_results[np.argsort(np_sim_results[:, 0])]
+        action_q_values = np_sim_results_sorted[:, 1]
+        best_action = np.argmax(action_q_values)
+
+        
+
+        return best_action, action_q_values
+    
+
+    @staticmethod
+    def _simulate_action_par_MOD(
+            agent_id: int,
+            action_id: int,
+            n_sims: int,
+            obs: List[float],
+            prev_actions: Dict[int, int],
+            m_agents: int,
+            agents: List[Agent],
+    ) -> Tuple[int, float]:
+        # Memory and CPU load
+        # create env
+        # run N simulations
+
+        # create env
+        env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
 
         # roll first step
         first_step_prev_actions = dict(prev_actions)

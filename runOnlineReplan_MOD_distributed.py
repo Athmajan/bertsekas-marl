@@ -1,3 +1,12 @@
+'''
+This is a version where the agent's internal simulator is the normal environment
+But the actual reward signal from the interacting environment is modified.
+
+In addition to above I am trying to implement the scenario where 
+the agents are trained using a single network but deployed with their own versions of the 
+trained networks. Therefore agents do not have visibility of the other agents actions but only theirs
+'''
+
 from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, as_completed
 from typing import List, Dict, Tuple
@@ -237,7 +246,7 @@ def main(
                         prev_actions[j] = act_n_signalling_dict[j]
 
                 # at this point the agent is optimizing and producing the optimal action
-                action_id,action_q_values = agent.act_forOnlineReplan(obs,modify_env, prev_actions=prev_actions)
+                action_id,action_q_values = agent.act_forOnlineReplan(obs,False, prev_actions=prev_actions)
 
                 act_n.append(action_id)
 
@@ -295,10 +304,10 @@ RETRAIN = 100
 if __name__ == '__main__':
     main(
         wandblog = True,
-        wandbName = "Autonomous_Online",
+        wandbName = "Autonomous_Online_MOD_V2",
         num_episodes = EPOCHS,
         replanEvery = RETRAIN,
-        modify_env=False,
+        modify_env=True,
     )
     
     

@@ -86,36 +86,8 @@ def getBasePolicy(obs,agent):
 
 
 
-def train_qnet(qnet, samples):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    qnet.train()
-
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(qnet.parameters(), lr=0.01)
-    data_loader = torch.utils.data.DataLoader(samples,
-                                              batch_size=BATCH_SIZE,
-                                              shuffle=True)
-
-    for epoch in range(200):  # loop over the dataset multiple times
-        running_loss = .0
-        n_batches = 0
-
-        for data in data_loader:
-            inputs, labels = data[0].to(device), data[1].to(device)
-            optimizer.zero_grad()
-            outputs = qnet(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            # logging
-            running_loss += loss.item()
-            n_batches += 1
-
-        print(f'[{epoch}] {running_loss / n_batches:.3f}.')
-
-    return qnet
+N_SIMS = 10
+EPOCHS = 3000
 
 # Function to log data with buffering
 def buffered_log(data, step, buffer, interval):
@@ -127,20 +99,15 @@ def buffered_log(data, step, buffer, interval):
         buffer.clear()
 
 
-def main(
-        wandblog, 
-        wandbName,
-        num_episodes,
-        replanEvery,
-        modify_env,
-        wandbProj="Long_Surveillance",
-        
-         ):
+def main(modify_env,wandbLog):
+    if modify_env:
+        env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
+    else:
+        env = gym.make(SpiderAndFlyEnv)
 
-    steps_history = []
     steps_num = 0
-    if wandblog :
-        wandb.init(project=wandbProj,name=wandbName)
+    if wandbLog:
+        wandb.init(project="Long_Surveillance",name="Autonomous_Offline_MOD")
         log_buffer = []
         log_interval = 50
 
@@ -151,15 +118,8 @@ def main(
     net.to(device)
     net.eval()
 
-    if modify_env:
-        env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
-    else:
-        env = gym.make(SpiderAndFlyEnv)
 
-    retainCounter = 0
-    samplesForTraining = []
-
-    for epi in range(num_episodes):
+    for epi in range(EPOCHS):
         # get episode start time
         startTime = time.time()
         # capture episide frames
@@ -236,16 +196,9 @@ def main(
                     if i > j :
                         prev_actions[j] = act_n_signalling_dict[j]
 
-                # at this point the agent is optimizing and producing the optimal action
-                action_id,action_q_values = agent.act_forOnlineReplan(obs,modify_env, prev_actions=prev_actions)
+                action_id = agent.act(obs,modify_env ,prev_actions=prev_actions)
 
                 act_n.append(action_id)
-
-
-
-                x = convert_to_x(obs, m_agents, i, action_space, prev_actions)
-                
-                samplesForTraining.append((x, action_q_values))
 
          
 
@@ -253,57 +206,36 @@ def main(
             epi_steps += 1
             steps_num += 1
             total_reward += np.mean(reward_n)
+
             frames.append(env.render())
         # end of an episode. capture time    
         endTime = time.time()
+
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
-        if wandblog :
+
+        if wandbLog:
             buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
                          epi, log_buffer, log_interval)
-            
-       
-
-        if (epi+1) % 1000 ==0 and wandblog:
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
-
-        retainCounter += 1
-        if retainCounter > replanEvery:
-            print(f"I am going to retrain at {epi} th episode")
-            net = train_qnet(net, samplesForTraining)
-            print("end of training")
-            retainCounter = 0
-            samplesForTraining = []
-            net.eval()
 
 
-    if wandblog:
+        if (epi+1) % 1000 ==0:
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
+
+    if wandbLog:
         if log_buffer:
             for item in log_buffer:
                 wandb.log(item[0], step=item[1], commit=False)
             wandb.log({}, commit=True)
             log_buffer.clear()
         wandb.finish()
+        
     env.close()
 
 
-
-N_SIMS = 10
-EPOCHS = 3000
-RETRAIN = 100
-
-
 if __name__ == '__main__':
-    main(
-        wandblog = True,
-        wandbName = "Autonomous_Online",
-        num_episodes = EPOCHS,
-        replanEvery = RETRAIN,
-        modify_env=False,
-    )
-    
-    
-    
-    
+    main(modify_env=True,wandbLog=True)
+
+   
 
 
 

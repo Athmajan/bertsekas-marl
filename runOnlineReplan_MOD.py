@@ -4,13 +4,14 @@ from typing import List, Dict, Tuple
 
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 import gym
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import ma_gym  # register new envs on import
 
-from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4, AgentType, \
+from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4,RepeatedRolloutModelPath_10x10_4v4_MOD, AgentType, \
     QnetType
 from src.qnetwork_coordinated import QNetworkCoordinated
 from src.agent_seq_rollout import SeqRolloutAgent
@@ -41,7 +42,7 @@ INPUT_QNET_NAME = RepeatedRolloutModelPath_10x10_4v4
 BASIS_POLICY_AGENT = AgentType.QNET_BASED
 QNET_TYPE = QnetType.BASELINE
 BASIS_AGENT_TYPE = AgentType.RULE_BASED
-
+OUTPUT_QNET_NAME_MOD = RepeatedRolloutModelPath_10x10_4v4_MOD
 
 def convert_to_x(obs, m_agents, agent_id, action_space, prev_actions):
     # state
@@ -88,16 +89,17 @@ def getBasePolicy(obs,agent):
 
 def train_qnet(qnet, samples):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+    qnet.to(device)
     qnet.train()
 
     criterion = nn.MSELoss()
     optimizer = optim.Adam(qnet.parameters(), lr=0.01)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=10, verbose=True)
     data_loader = torch.utils.data.DataLoader(samples,
                                               batch_size=BATCH_SIZE,
                                               shuffle=True)
 
-    for epoch in range(200):  # loop over the dataset multiple times
+    for epoch in range(1000):  # loop over the dataset multiple times
         running_loss = .0
         n_batches = 0
 
@@ -113,7 +115,9 @@ def train_qnet(qnet, samples):
             running_loss += loss.item()
             n_batches += 1
 
+        avg_loss = running_loss / n_batches
         print(f'[{epoch}] {running_loss / n_batches:.3f}.')
+        scheduler.step(avg_loss)
 
     return qnet
 
@@ -142,14 +146,45 @@ def main(
     if wandblog :
         wandb.init(project=wandbProj,name=wandbName)
         log_buffer = []
-        log_interval = 50
+        log_interval = 100
 
     _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
     net = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
     net.load_state_dict(torch.load(INPUT_QNET_NAME))
     net.to(device)
     net.eval()
+
+
+    # Create 4 duplicates for each agents
+
+    # network for Agent_A
+    # net_A = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
+    # net_A.load_state_dict(torch.load(INPUT_QNET_NAME))
+    # net_A.to(device)
+    # net_A.eval()
+
+    # # network for Agent_B
+    # net_B = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
+    # net_B.load_state_dict(torch.load(INPUT_QNET_NAME))
+    # net_B.to(device)
+    # net_B.eval()
+
+    # #network for Agent_C
+    # net_C= QNetworkCoordinated(M_AGENTS, P_PREY, 5)
+    # net_C.load_state_dict(torch.load(INPUT_QNET_NAME))
+    # net_C.to(device)
+    # net_C.eval()
+
+    # #network for Agent_D
+    # net_D= QNetworkCoordinated(M_AGENTS, P_PREY, 5)
+    # net_D.load_state_dict(torch.load(INPUT_QNET_NAME))
+    # net_D.to(device)
+    # net_D.eval()
+
+
 
     if modify_env:
         env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
@@ -158,7 +193,7 @@ def main(
 
     retainCounter = 0
     samplesForTraining = []
-
+    actionHistogram = []
     for epi in range(num_episodes):
         # get episode start time
         startTime = time.time()
@@ -237,7 +272,7 @@ def main(
                         prev_actions[j] = act_n_signalling_dict[j]
 
                 # at this point the agent is optimizing and producing the optimal action
-                action_id,action_q_values = agent.act_forOnlineReplan(obs,modify_env, prev_actions=prev_actions)
+                action_id,action_q_values = agent.act_forOnlineReplan(obs,False, prev_actions=prev_actions)
 
                 act_n.append(action_id)
 
@@ -245,17 +280,26 @@ def main(
 
                 x = convert_to_x(obs, m_agents, i, action_space, prev_actions)
                 
-                samplesForTraining.append((x, action_q_values))
+                samplesForTraining.append((x, action_q_values,i))
 
          
 
             obs_n, reward_n, done_n, info = env.step(act_n)
+            actionHistogram.append(act_n)
+
+           
+
             epi_steps += 1
             steps_num += 1
             total_reward += np.mean(reward_n)
             frames.append(env.render())
         # end of an episode. capture time    
         endTime = time.time()
+
+        
+
+        
+
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
         if wandblog :
             buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
@@ -264,12 +308,24 @@ def main(
        
 
         if (epi+1) % 1000 ==0 and wandblog:
+
             wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
 
         retainCounter += 1
         if retainCounter > replanEvery:
-            print(f"I am going to retrain at {epi} th episode")
-            net = train_qnet(net, samplesForTraining)
+            # Process each samples based on real reward
+            newsamplesForTraining = []
+            for samples in samplesForTraining:
+                observ = samples[0]
+                actQval = samples[1]
+                agentID = samples[2]
+                # encourage and discourage staying still (action #4)
+                actQval[0:3] = actQval[0:3]*reward_n[agentID]*-1
+                newsamplesForTraining.append((observ,actQval))
+
+            print(len(newsamplesForTraining))
+            net = train_qnet(net, newsamplesForTraining)
+            torch.save(net.state_dict(), OUTPUT_QNET_NAME_MOD)
             print("end of training")
             retainCounter = 0
             samplesForTraining = []
@@ -288,17 +344,17 @@ def main(
 
 
 N_SIMS = 10
-EPOCHS = 3000
-RETRAIN = 100
+EPOCHS = 30000
+RETRAIN = 5000
 
 
 if __name__ == '__main__':
     main(
         wandblog = True,
-        wandbName = "Autonomous_Online",
+        wandbName = "Autonomous_Online_MOD_30000",
         num_episodes = EPOCHS,
         replanEvery = RETRAIN,
-        modify_env=False,
+        modify_env=True,
     )
     
     

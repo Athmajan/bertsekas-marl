@@ -28,10 +28,10 @@ import warnings
 # Suppress the specific gym warning
 warnings.filterwarnings("ignore", category=UserWarning)
 import wandb
-
+from changeEnv import oddEvenRewardEnv
 
 AGENT_TYPE = AgentType.SEQ_MA_ROLLOUT
-N_EPISODES = 30
+N_EPISODES = 3000
 #GENT_TYPE = AgentType.SEQ_MA_ROLLOUT
 QNET_TYPE = QnetType.REPEATED
 BASIS_AGENT_TYPE = AgentType.RULE_BASED
@@ -56,11 +56,26 @@ def create_agents(
     ) for agent_i in range(m_agents)]
    
 
+# Function to log data with buffering
+def buffered_log(data, step, buffer, interval):
+    buffer.append((data, step))
+    if len(buffer) >= interval:
+        for item in buffer:
+            wandb.log(item[0], step=item[1], commit=False)
+        wandb.log({}, commit=True)  # Commit all logs at once
+        buffer.clear()
 
 
-if __name__ == '__main__':
-    env = gym.make(SpiderAndFlyEnv)
-    wandb.init(project="SecurityAndSurveillance",name="Sequential Rollout")
+def main(modify_env,wandbLog):
+    if modify_env:
+        env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
+    else:
+        env = gym.make(SpiderAndFlyEnv)
+
+    if wandbLog:
+        wandb.init(project="Long_Surveillance",name="Sequential Rollout_MOD")
+        log_buffer = []
+        log_interval = 50
     
     for epi in range (N_EPISODES):
         frames = []
@@ -76,7 +91,7 @@ if __name__ == '__main__':
             act_n = []
             for i, (agent, obs) in enumerate(zip(agents, obs_n)):
                 # each agent acts based on the same observation
-                action_id = agent.act(obs, prev_actions=prev_actions)
+                action_id = agent.act(obs,modify_env ,prev_actions=prev_actions)
                 prev_actions[i] = action_id
 
                 act_n.append(action_id)
@@ -84,22 +99,33 @@ if __name__ == '__main__':
 
             obs_n, reward_n, done_n, info = env.step(act_n)
             epi_steps += 1
-            total_reward += np.sum(reward_n)
+            total_reward += np.mean(reward_n)
             frames.append(env.render())
 
         endTime = time.time()
 
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
-        time.sleep(6)
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime-6},step=epi) 
-        
+        if wandbLog:
+            buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
+                         epi, log_buffer, log_interval)
         
 
-        if (epi+1) % 10 ==0:
+
+        if (epi+1) % 1000 ==0 and wandbLog:
             print("Checpoint passed")
             # axes are (time, channel, height, width)
             # create_movie_clip(frames, f"ManhattanRuleBased_2_agents_{epi+1}.mp4", fps=10)
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
 
-    wandb.finish()
+    if wandbLog:
+        if log_buffer:
+            for item in log_buffer:
+                wandb.log(item[0], step=item[1], commit=False)
+            wandb.log({}, commit=True)
+            log_buffer.clear()
+        wandb.finish()
     env.close()
+
+
+if __name__ == '__main__':
+    main(modify_env=True,wandbLog=True)

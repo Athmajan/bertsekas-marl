@@ -9,8 +9,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import ma_gym  # register new envs on import
-
-from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4, AgentType, \
+import os
+from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4,RepeatedRolloutModelPath_10x10_4v4_MOD, AgentType, \
     QnetType
 from src.qnetwork_coordinated import QNetworkCoordinated
 from src.agent_seq_rollout import SeqRolloutAgent
@@ -25,7 +25,8 @@ import warnings
 
 # Suppress the specific gym warning
 warnings.filterwarnings("ignore", category=UserWarning)
-
+from changeEnv import oddEvenRewardEnv
+import pandas as pd
 
 SEED = 42
 
@@ -87,21 +88,50 @@ def getBasePolicy(obs,agent):
 
 
 N_SIMS = 10
-EPOCHS = 30
+EPOCHS = 1000
 
-if __name__ == '__main__':
-    steps_history = []
-    steps_num = 0
-    wandb.init(project="SecurityAndSurveillance",name="AutoRollout_Off_Optimized")
+
+
+
+# Function to log data with buffering
+def buffered_log(data, step, buffer, interval):
+    buffer.append((data, step))
+    if len(buffer) >= interval:
+        for item in buffer:
+            wandb.log(item[0], step=item[1], commit=False)
+        wandb.log({}, commit=True)  # Commit all logs at once
+        buffer.clear()
+
+
+def main(modify_env,wandbLog,modelFileName):
+    actionsFreq = {
+        0:{0:0,1:0,2:0,3:0,4:0,},
+        1:{0:0,1:0,2:0,3:0,4:0,},
+        2:{0:0,1:0,2:0,3:0,4:0,},
+        3:{0:0,1:0,2:0,3:0,4:0,},
+    }
     
+    
+
+
+    if modify_env:
+        env = oddEvenRewardEnv(gym.make(SpiderAndFlyEnv),oddRewardScale=10,evenRewardScale=1)
+    else:
+        env = gym.make(SpiderAndFlyEnv)
+
+    steps_num = 0
+    if wandbLog:
+        wandb.init(project="Long_Surveillance",name="Autonomous_Offline")
+        log_buffer = []
+        log_interval = 50
+
     _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
-    net.load_state_dict(torch.load(INPUT_QNET_NAME))
+    net.load_state_dict(torch.load(modelFileName))
     net.to(device)
     net.eval()
 
-    env = gym.make(SpiderAndFlyEnv)
 
     for epi in range(EPOCHS):
         # get episode start time
@@ -120,7 +150,7 @@ if __name__ == '__main__':
 
         m_agents = env.n_agents
         p_preys = env.n_preys
-        grid_shape = env._grid_shape
+        grid_shape = (10,10)
         action_space = env.action_space[0]
 
         done_n = [False] * m_agents
@@ -180,30 +210,72 @@ if __name__ == '__main__':
                     if i > j :
                         prev_actions[j] = act_n_signalling_dict[j]
 
-                action_id = agent.act(obs, prev_actions=prev_actions)
+                action_id = agent.act(obs, modify_env,prev_actions=prev_actions)
 
                 act_n.append(action_id)
 
          
 
             obs_n, reward_n, done_n, info = env.step(act_n)
+            for (agentID,actionOfAgent) in enumerate(act_n):
+                actionsFreq[agentID][actionOfAgent] += 1
+
+        
+
+
             epi_steps += 1
             steps_num += 1
-            total_reward += np.sum(reward_n)
+            total_reward += np.mean(reward_n)
+
             frames.append(env.render())
         # end of an episode. capture time    
         endTime = time.time()
+
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
-        time.sleep(6)
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime-6},step=epi) 
-        steps_history.append(epi_steps)
 
-        if (epi+1) % 10 ==0:
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+        if wandbLog:
+            buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
+                         epi, log_buffer, log_interval)
 
 
-    wandb.finish()
+        if (epi+1) % 1000 ==0:
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
+
+    if wandbLog:
+        if log_buffer:
+            for item in log_buffer:
+                wandb.log(item[0], step=item[1], commit=False)
+            wandb.log({}, commit=True)
+            log_buffer.clear()
+        wandb.finish()
+        
     env.close()
+
+    return actionsFreq
+
+
+
+def process_file(fileName):
+    actionsFreq = main(modify_env=False, wandbLog=False, modelFileName=fileName)
+    dfactionsFreq = pd.DataFrame(actionsFreq)
+    output_file = f"OfflineRunofModified_{os.path.basename(fileName)}.csv"
+    dfactionsFreq.to_csv(output_file, index=False)
+    return output_file
+
+
+if __name__ == '__main__':
+    listofFiles = [RepeatedRolloutModelPath_10x10_4v4,RepeatedRolloutModelPath_10x10_4v4_MOD]
+   
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_file, fileName) for fileName in listofFiles]
+        for future in futures:
+            try:
+                result = future.result()
+                print(f"Completed: {result}")
+            except Exception as exc:
+                print(f"Generated an exception: {exc}")
+
+   
 
 
 
