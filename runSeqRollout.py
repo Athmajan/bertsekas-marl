@@ -60,7 +60,7 @@ def create_agents(
 
 if __name__ == '__main__':
     env = gym.make(SpiderAndFlyEnv)
-    wandb.init(project="SecurityAndSurveillance",name="Sequential Rollout")
+    wandb.init(project="SecurityAndSurveillance",name="Seq_Roll_2StepLookahead")
     
     for epi in range (N_EPISODES):
         frames = []
@@ -72,6 +72,7 @@ if __name__ == '__main__':
         total_reward = 0.
         epi_steps = 0
         while not all(done_n):
+            
             prev_actions = {}
             act_n = []
             for i, (agent, obs) in enumerate(zip(agents, obs_n)):
@@ -83,15 +84,15 @@ if __name__ == '__main__':
 
 
             obs_n, reward_n, done_n, info = env.step(act_n)
+            print(f"taking Step {act_n}")
             epi_steps += 1
-            total_reward += np.sum(reward_n)
+            total_reward += np.mean(reward_n)
             frames.append(env.render())
 
         endTime = time.time()
 
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
-        time.sleep(6)
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime-6},step=epi) 
+        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
         
 
 
@@ -101,5 +102,5 @@ if __name__ == '__main__':
             # create_movie_clip(frames, f"ManhattanRuleBased_2_agents_{epi+1}.mp4", fps=10)
             wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
 
-    wandb.finish()
+    # wandb.finish()
     env.close()
