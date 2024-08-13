@@ -35,7 +35,7 @@ class PredatorPrey(gym.Env):
             self,
             grid_shape=(10, 10),
             n_agents=4,
-            n_preys=2,
+            n_preys=10,
             prey_move_probs=(0.2, 0.2, 0.2, 0.2, 0.2),
             # penalty=1,  # initially -0.5; here we assume no penalty for catching the prey solo
             step_cost=-1,
@@ -58,6 +58,7 @@ class PredatorPrey(gym.Env):
         self._prey_alive = None
 
         self._base_grid = self.__create_grid()  # with no agents
+        self._full_obs = self.__create_grid()
 
         self._agent_dones = [False for _ in range(self.n_agents)]
         self._prey_move_probs = prey_move_probs
@@ -111,7 +112,7 @@ class PredatorPrey(gym.Env):
 
     def get_agent_obs(self):
         _obs = []
-
+        
         # all agents' position
         for agent_i in range(self.n_agents):
             pos = self.agent_pos[agent_i]
@@ -134,9 +135,9 @@ class PredatorPrey(gym.Env):
 
         #print(_obs)
         # same observations for all agents
-        _obs = np.array(_obs).flatten().tolist()
+        #_obs = np.array(_obs).flatten().tolist() # this does not work for n_preys != 2 since other items are of length 2
+        _obs = np.array([item for sublist in _obs for item in sublist])
         _obs = [_obs for _ in range(self.n_agents)]
-
         return _obs
 
     def reset(self):
@@ -277,13 +278,13 @@ class PredatorPrey(gym.Env):
 
     def __next_pos(self, curr_pos, move):
         if move == 0:  # down
-            next_pos = [curr_pos[0] + 1, curr_pos[1]]
+            next_pos = [curr_pos[0], curr_pos[1]-1]
         elif move == 1:  # left
-            next_pos = [curr_pos[0], curr_pos[1] - 1]
+            next_pos = [curr_pos[0]-1, curr_pos[1]]
         elif move == 2:  # up
-            next_pos = [curr_pos[0] - 1, curr_pos[1]]
+            next_pos = [curr_pos[0], curr_pos[1]+1]
         elif move == 3:  # right
-            next_pos = [curr_pos[0], curr_pos[1] + 1]
+            next_pos = [curr_pos[0]+1, curr_pos[1]]
         elif move == 4:  # no-op
             next_pos = curr_pos
         return next_pos
@@ -311,7 +312,33 @@ class PredatorPrey(gym.Env):
                 # print('pos not updated')
                 pass
 
+    def _neighbour_agents(self, pos):
+        # check if agent is in neighbour
+        _count = 0
+        neighbours_xy = []
+        if self.is_valid([pos[0] + 1, pos[1]]) and PRE_IDS['agent'] in self._full_obs[pos[0] + 1][pos[1]]:
+            _count += 1
+            neighbours_xy.append([pos[0] + 1, pos[1]])
+        if self.is_valid([pos[0] - 1, pos[1]]) and PRE_IDS['agent'] in self._full_obs[pos[0] - 1][pos[1]]:
+            _count += 1
+            neighbours_xy.append([pos[0] - 1, pos[1]])
+        if self.is_valid([pos[0], pos[1] + 1]) and PRE_IDS['agent'] in self._full_obs[pos[0]][pos[1] + 1]:
+            _count += 1
+            neighbours_xy.append([pos[0], pos[1] + 1])
+        if self.is_valid([pos[0], pos[1] - 1]) and PRE_IDS['agent'] in self._full_obs[pos[0]][pos[1] - 1]:
+            neighbours_xy.append([pos[0], pos[1] - 1])
+            _count += 1
+
+        agent_id = []
+        for x, y in neighbours_xy:
+            agent_id.append(int(self._full_obs[x][y].split(PRE_IDS['agent'])[1]) - 1)
+        return _count, agent_id
+    
+
     def step(self, agents_action):
+        assert (self._step_count is not None), \
+            "Call reset before using step method."
+        
         self._step_count += 1
 
         rewards = [self._step_cost for _ in range(self.n_agents)]
@@ -321,11 +348,44 @@ class PredatorPrey(gym.Env):
             if not (self._agent_dones[agent_i]):
                 self.__update_agent_pos(agent_i, action)
 
-        # all preys move
+        '''
+        Making a modification to the envionment here from the original (main)
+        where the preys become smart. They simulate their options for the next move.
+        The simualted next step will consider how many agents are there in the neighbourhood.
+        And it will take the most safest move.
+        '''
+
         for prey_i in range(self.n_preys):
             if self._prey_alive[prey_i]:
-                _move = self.np_random.choice(len(self._prey_move_probs), 1, p=self._prey_move_probs)[0]
-                self.__update_prey_pos(prey_i, _move)
+                
+                # number of simulations 
+                prey_move_sim_n = 100
+                moveDict = {0:0, 1:0, 2:0, 3:0, 4:0}
+                for _ in range(prey_move_sim_n):
+                    _move = self.np_random.choice(len(self._prey_move_probs), 1, p=self._prey_move_probs)[0]
+                    # scan 2x2 grid around itself and count how many agents are present
+                    nextPosPrey = self.__next_pos(self.prey_pos[prey_i], _move)
+                    
+                    positionsToScan = [
+                        [nextPosPrey[0], nextPosPrey[1]],        # next position
+                        [nextPosPrey[0], nextPosPrey[1]-1],      # south of next position
+                        [nextPosPrey[0]-1, nextPosPrey[1]-1],    # south west of next position
+                        [nextPosPrey[0]-1, nextPosPrey[1]],      # west of next position
+                        [nextPosPrey[0]-1, nextPosPrey[1]+1],    # north west of next position
+                        [nextPosPrey[0], nextPosPrey[1]+1],      # north of next position
+                        [nextPosPrey[0]+1, nextPosPrey[1]+1],    # north east of next position
+                        [nextPosPrey[0]+1, nextPosPrey[1]],      # east of next position
+                        [nextPosPrey[0]+1, nextPosPrey[1]-1],    # south east of next position    
+                    ]
+
+                    for scanLocations in positionsToScan:
+                        for agentID in range(self.n_agents):
+                            if scanLocations == self.agent_pos[agentID]:
+                                moveDict[_move] += 1
+
+                prey_move = min(moveDict, key=moveDict.get)
+                prey_move = 4 if prey_move is None else prey_move 
+                self.__update_prey_pos(prey_i, prey_move)
 
                 # recalculate alive status + add reward if caught
                 prey_j_pos = self.prey_pos[prey_i]
