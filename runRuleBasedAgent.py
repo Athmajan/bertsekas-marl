@@ -39,12 +39,12 @@ def create_movie_clip(frames: list, output_file: str, fps: int = 10):
 if __name__ == "__main__":
     env = gym.make(SpiderAndFlyEnv)
     env.n_agents = 4
-    env.n_preys = 10
+    env.n_preys = 2
 
     steps_history = []
     
     steps_num = 0
-    # wandb.init(project="SecurityAndSurveillance",name="ManhattanDistanceRule")
+    wandb.init(project="smartFlies",name="Rulebased_4A_2_P")
     for epi in range(EPOCHS):
         startTime = time.time()
         frames = []
@@ -79,7 +79,7 @@ if __name__ == "__main__":
             frames.append(env.render())
 
         endTime = time.time()
-        # wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
+        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
         print(f"End of {epi}'th episode with {epi_steps} steps")
         steps_history.append(epi_steps)
         
@@ -88,11 +88,11 @@ if __name__ == "__main__":
             print("Checpoint passed")
             # axes are (time, channel, height, width)
             # create_movie_clip(frames, f"ManhattanRuleBased_2_agents_{epi+1}.mp4", fps=10)
-            # wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
             
 
 
-    # wandb.finish()
+    wandb.finish()
     env.close()
 
     # create_movie_clip(frames, 'ManhattanRuleBased_2_agents.mp4', fps=10)

@@ -354,13 +354,14 @@ class PredatorPrey(gym.Env):
         The simualted next step will consider how many agents are there in the neighbourhood.
         And it will take the most safest move.
         '''
-
+        
         for prey_i in range(self.n_preys):
             if self._prey_alive[prey_i]:
                 
                 # number of simulations 
                 prey_move_sim_n = 100
-                moveDict = {0:0, 1:0, 2:0, 3:0, 4:0}
+                moveDict_Init = {0:0, 1:0, 2:0, 3:0, 4:0}
+                moveDict = moveDict_Init
                 for _ in range(prey_move_sim_n):
                     _move = self.np_random.choice(len(self._prey_move_probs), 1, p=self._prey_move_probs)[0]
                     # scan 2x2 grid around itself and count how many agents are present
@@ -383,8 +384,17 @@ class PredatorPrey(gym.Env):
                             if scanLocations == self.agent_pos[agentID]:
                                 moveDict[_move] += 1
 
-                prey_move = min(moveDict, key=moveDict.get)
-                prey_move = 4 if prey_move is None else prey_move 
+
+                if moveDict_Init == moveDict:
+                    # There has been no agents detected in the next possible moves 
+                    # could mean agents are far away from the field of vision of the prey
+                    # at this condition the prey will chose a random aciton based on the prob distn.
+                    prey_move = _move = self.np_random.choice(len(self._prey_move_probs),1, p=self._prey_move_probs)[0]
+                else:
+                    # Agents have been detected in one or more next possible moves.
+                    # The prey will decide the next good action based on the simulation results
+                    prey_move = min(moveDict, key=moveDict.get)
+                     
                 self.__update_prey_pos(prey_i, prey_move)
 
                 # recalculate alive status + add reward if caught

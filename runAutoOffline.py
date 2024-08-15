@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import ma_gym  # register new envs on import
-
+import os
 from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4, AgentType, \
     QnetType
 from src.qnetwork_coordinated import QNetworkCoordinated
@@ -25,7 +25,7 @@ import warnings
 
 # Suppress the specific gym warning
 warnings.filterwarnings("ignore", category=UserWarning)
-
+import pandas as pd
 
 SEED = 42
 
@@ -40,6 +40,8 @@ FROM_SCRATCH = False
 INPUT_QNET_NAME = RepeatedRolloutModelPath_10x10_4v4
 BASIS_POLICY_AGENT = AgentType.QNET_BASED
 QNET_TYPE = QnetType.BASELINE
+BASIS_AGENT_TYPE = AgentType.RULE_BASED
+
 
 def convert_to_x(obs, m_agents, agent_id, action_space, prev_actions):
     # state
@@ -82,125 +84,42 @@ def getBasePolicy(obs,agent):
 
 
 
-def _simulate_action_par(
-            agent_id: int,
-            action_id: int,
-            n_sims: int,
-            obs: List[float],
-            m_agents: int,
-            agents: List[Agent],
-            act_n_signalling,
-            act_n_base2,
-    ) -> Tuple[int, float]:
-        # Memory and CPU load
-        # create env
-        # run N simulations
-
-        # create env
-        env = gym.make(SpiderAndFlyEnv)
-
-        first_act_n = np.empty((m_agents,), dtype=np.int8)
-
-        # optimize for agent i
-        for j in range(m_agents):
-            #get future agents actions
-            if j > agent_id:
-                first_act_n[j] = act_n_base2[j]
-            elif j< agent_id :
-                # get receding agents actions
-                first_act_n[j] = act_n_signalling[j]
-            elif j == agent_id:
-                first_act_n[j] = action_id
-
-
-        # print(f"Agent_{agent_id}_Action_{action_id}_Signaling Policy_{act_n_signalling}_Base Policy_{act_n_base2}_FirsttepN  {first_act_n}")
-        # run N simulations
-        avg_total_reward = 0.
-
-        for j in range(n_sims):
-            # init env from observation
-            env.reset()
-            sim_obs_n = env.reset_from(obs)
-
-            # make prescribed first step
-            sim_obs_n, sim_reward_n, sim_done_n, sim_info = env.step(first_act_n)
-            avg_total_reward += np.sum(sim_reward_n)
-
-            # run simulation
-            while not all(sim_done_n):
-                sim_act_n = []
-                sim_prev_actions = {}
-                for agent, sim_obs in zip(agents, sim_obs_n):
-                    sim_best_action = agent.act(sim_obs, prev_actions=sim_prev_actions)
-                    sim_act_n.append(sim_best_action)
-                    sim_prev_actions[agent.id] = sim_best_action
-
-                sim_obs_n, sim_reward_n, sim_done_n, sim_info = env.step(sim_act_n)
-                avg_total_reward += np.sum(sim_reward_n)
-
-        env.close()
-
-        avg_total_reward /= len(agents)
-        avg_total_reward /= n_sims
-
-        return action_id, avg_total_reward
-
-
-def actwithinfo(
-        action_space,
-        _n_workers,
-        agent,
-        n_sim,
-        obs,
-        m_agents,
-        agents,
-        act_n_signalling,
-        act_n_base2,
-                    ):
-    n_actions = action_space.n
-    sim_results = []
-    with ProcessPoolExecutor(max_workers=_n_workers) as pool:
-        futures = []
-        for action_id in range(n_actions):
-            futures.append(pool.submit(
-                _simulate_action_par,
-                agent.id,
-                action_id,
-                n_sim,
-                obs,
-                m_agents,
-                agents,
-                act_n_signalling,
-                act_n_base2,
-            ))
-        for f in as_completed(futures):
-            res = f.result()
-            sim_results.append(res)
-
-    np_sim_results = np.array(sim_results, dtype=np.float32)
-    np_sim_results_sorted = np_sim_results[np.argsort(np_sim_results[:, 0])]
-    action_q_values = np_sim_results_sorted[:, 1]
-    best_action = np.argmax(action_q_values)
-    return best_action
-
 
 
 N_SIMS = 10
-EPOCHS = 30
+EPOCHS = 10
 
-if __name__ == '__main__':
-    steps_history = []
+
+
+
+# Function to log data with buffering
+def buffered_log(data, step, buffer, interval):
+    buffer.append((data, step))
+    if len(buffer) >= interval:
+        for item in buffer:
+            wandb.log(item[0], step=item[1], commit=False)
+        wandb.log({}, commit=True)  # Commit all logs at once
+        buffer.clear()
+
+
+def main(wandbLog,modelFileName):
+    env = gym.make(SpiderAndFlyEnv)
+    env.n_agents = 4
+    env.n_preys = 2
+
     steps_num = 0
-    wandb.init(project="SecurityAndSurveillance",name="AutoRollout_Off")
-    
+    if wandbLog:
+        wandb.init(project="smartFlies",name="Auto_RegA4_P2")
+        log_buffer = []
+        log_interval = 50
+
     _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
-    net.load_state_dict(torch.load(INPUT_QNET_NAME))
+    net.load_state_dict(torch.load(modelFileName))
     net.to(device)
     net.eval()
 
-    env = gym.make(SpiderAndFlyEnv)
 
     for epi in range(EPOCHS):
         # get episode start time
@@ -219,7 +138,7 @@ if __name__ == '__main__':
 
         m_agents = env.n_agents
         p_preys = env.n_preys
-        grid_shape = env._grid_shape
+        grid_shape = (10,10)
         action_space = env.action_space[0]
 
         done_n = [False] * m_agents
@@ -227,8 +146,10 @@ if __name__ == '__main__':
         while not all(done_n):
 
             # Query Signalling policy from network eval
+            
             prev_actions = {}
             act_n_signalling = []
+            
             with ThreadPoolExecutor(max_workers=_n_workers) as executor:
                 futures = [
                     executor.submit(getSignallingPolicy, net, obs, m_agents, agent_i, prev_actions, action_space)
@@ -237,72 +158,92 @@ if __name__ == '__main__':
 
                 for future in as_completed(futures):
                     act_n_signalling.append(future.result())
-
+           
+            act_n_signalling_dict = {}
+            for i in range(len(act_n_signalling)):
+                act_n_signalling_dict[i] = act_n_signalling[i]
             # print(act_n_signalling)
 
+            
+            '''
+            clearing the role of agents. No need of rule based agents anymore
+            we need to work with parallel computations where consequetive agent actions are decided 
+            based on rules and the receding agents actions are decided based on the signalling policy.
+            This should be just a clone of the role of a sequential rollout agent where the previous actions
+            are replaced with the signalling policy than waiting for each agent to communicate.
 
-            # Query base policy from base policy (Rule Based)
-            agents = [RuleBasedAgent(i, m_agents, p_preys, grid_shape, env.action_space[i]) for i in range(m_agents)]
-
-            act_n_base = []
-            with ThreadPoolExecutor(max_workers=_n_workers) as executor:
-                futures = [
-                    executor.submit(getBasePolicy,obs,agent)
-                    for i, (agent,obs) in enumerate(zip(agents,obs_n))
-                ]
-                for future in as_completed(futures):
-                    act_n_base.append(future.result())
-
-            # print(act_n_base)
-            act_n_base2 = []
-            for agent in range(m_agents):
-                for actItem in act_n_base:
-                    if agent in actItem:
-                        act_n_base2.append(actItem[agent])
-                        break
+            Sequential rollout agents are written already to take the future actions to be base policy.
+            So only need to give them the previous actions using the signaling policy.
+            '''
 
 
-            act_auto_n = []
-            with ProcessPoolExecutor(max_workers=_n_workers) as executor_outer:
-                outer_futures = []
-                for i, (agent, obs) in enumerate(zip(agents, obs_n)):
-                    outer_futures.append(
-                        executor_outer.submit(
-                                        actwithinfo,
-                                        action_space,
-                                        _n_workers,
-                                        agent,
-                                        N_SIMS,
-                                        obs,
-                                        m_agents,
-                                        agents,
-                                        act_n_signalling,
-                                        act_n_base2,
-                                        ))
-                    
-                for future in as_completed(outer_futures):
-                    best_action = future.result()
-                    act_auto_n.append(best_action)
+            agents = [SeqRolloutAgent(
+                agent_i, 
+                m_agents, 
+                p_preys, 
+                grid_shape, 
+                env.action_space[agent_i],
+                n_sim_per_step=N_SIMS, 
+                basis_agent_type=BASIS_AGENT_TYPE, 
+                qnet_type=QNET_TYPE,
+                ) for agent_i in range(m_agents)]
+            
+            act_n = []
+            for i, (agent, obs) in enumerate(zip(agents, obs_n)):
+                # here initially doing sequentially.
+                # should optimize this further by parallelly
+                # comupting actions for all agents at once.
+                prev_actions = {}
+                for j, (_) in enumerate(zip(agents)):
+                    if i > j :
+                        prev_actions[j] = act_n_signalling_dict[j]
 
-            # print(act_auto_n)
+                action_id = agent.act(obs,prev_actions=prev_actions)
 
+                act_n.append(action_id)
 
-            obs_n, reward_n, done_n, info = env.step(act_auto_n)
+         
+
+            obs_n, reward_n, done_n, info = env.step(act_n)
+
             epi_steps += 1
             steps_num += 1
-            total_reward += np.sum(reward_n)
+            total_reward += np.mean(reward_n)
+
             frames.append(env.render())
         # end of an episode. capture time    
         endTime = time.time()
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
-        steps_history.append(epi_steps)
 
-        if (epi+1) % 10 ==0:
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+        print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
+
+        if wandbLog:
+            buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
+                         epi, log_buffer, log_interval)
 
 
-    wandb.finish()
+        if (epi+1) % 1000 ==0:
+            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
+
+    if wandbLog:
+        if log_buffer:
+            for item in log_buffer:
+                wandb.log(item[0], step=item[1], commit=False)
+            wandb.log({}, commit=True)
+            log_buffer.clear()
+        wandb.finish()
+        
     env.close()
+
+    return
+
+
+
+
+
+if __name__ == '__main__':
+    main(wandbLog=True,modelFileName = RepeatedRolloutModelPath_10x10_4v4)
+
+   
 
 
 
@@ -310,7 +251,6 @@ if __name__ == '__main__':
                 
 
      
-
 
 
 
