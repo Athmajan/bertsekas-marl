@@ -354,7 +354,7 @@ class PredatorPrey(gym.Env):
         The simualted next step will consider how many agents are there in the neighbourhood.
         And it will take the most safest move.
         '''
-        
+
         for prey_i in range(self.n_preys):
             if self._prey_alive[prey_i]:
                 
