@@ -9,10 +9,10 @@ import torch.nn as nn
 import torch.optim as optim
 import ma_gym  # register new envs on import
 
-from src.constants import SpiderAndFlyEnv, smartPreys, AgentType, \
+from src.constants import SpiderAndFlyEnv, BaselineModelPath_10x10_4v3, AgentType, \
     QnetType
 from src.qnetwork_coordinated import QNetworkCoordinated
-from src.agent_seq_rollout import SeqRolloutAgent
+from src.agent_seq_rollout import SeqRolloutAgent, RuleBasedAgent
 
 import wandb
 import warnings
@@ -23,15 +23,16 @@ warnings.filterwarnings("ignore", category=UserWarning)
 SEED = 42
 M_AGENTS = 4
 P_PREY = 2
-N_SAMPLES = 10000
+N_SAMPLES = 1000
 BATCH_SIZE = 1024
-EPOCHS = 1000
+EPOCHS = 10
 N_SIMS_MC = 10
 FROM_SCRATCH = True
-INPUT_QNET_NAME = smartPreys
-OUTPUT_QNET_NAME = smartPreys
+INPUT_QNET_NAME = BaselineModelPath_10x10_4v3
+OUTPUT_QNET_NAME = BaselineModelPath_10x10_4v3
 BASIS_POLICY_AGENT = AgentType.QNET_BASED
 QNET_TYPE = QnetType.BASELINE
+
 
 
 def generate_samples(n_samples, seed):
@@ -56,29 +57,24 @@ def generate_samples(n_samples, seed):
             grid_shape = env._grid_shape
             action_space = env.action_space[0]
 
-            agents = [SeqRolloutAgent(
-                i, m_agents, p_preys, grid_shape, env.action_space[i],
-                n_sim_per_step=N_SIMS_MC,
-                basis_agent_type=BASIS_POLICY_AGENT,
-                qnet_type=QNET_TYPE,
-            ) for i in range(m_agents)]
+            agents = [RuleBasedAgent(i, m_agents, p_preys, grid_shape, env.action_space[i]) for i in range(m_agents)]
 
             # init stopping condition
             done_n = [False] * m_agents
 
             while not all(done_n):
+                obs_first = np.array(obs_n[0], dtype=np.float32).flatten()
+
                 prev_actions = {}
                 act_n = []
                 for i, (agent, obs) in enumerate(zip(agents, obs_n)):
-                    best_action, action_q_values = agent.act_with_info(
-                        obs, prev_actions=prev_actions)
-
-                    # create an (x,y) sample for QNet
+                    # each agent is passed the same observation and asked to act
+                    agent_ohe = np.zeros(shape=(m_agents,), dtype=np.float32)
+                    best_action, action_q_values = agent.act_with_info(obs)
                     agent_ohe = np.zeros(shape=(m_agents,), dtype=np.float32)
                     agent_ohe[i] = 1.
 
                     prev_actions_ohe = np.zeros(shape=(m_agents * action_space.n,), dtype=np.float32)
-
                     for agent_i, action_i in prev_actions.items():
                         ohe_action_index = int(agent_i * action_space.n) + prev_actions[agent_i]
                         prev_actions_ohe[ohe_action_index] = 1.
@@ -91,19 +87,19 @@ def generate_samples(n_samples, seed):
                     if len(samples) == N_SAMPLES:
                         env.close()
                         return samples
-
-                    # best action taken for the agent i
+                    
                     prev_actions[i] = best_action
                     act_n.append(best_action)
-
-                # update step
+                
                 obs_n, reward_n, done_n, info = env.step(act_n)
+
 
     env.close()
 
     print('Finished sample generation.')
 
     return samples[:n_samples]
+
 
 def train_qnetwork(samples):
     print('Started Training.')
@@ -163,12 +159,12 @@ def train_qnetwork(samples):
     return net
 
 
+
 if __name__ == '__main__':
     t1 = perf_counter()
     n_workers = 10
     chunk = int(N_SAMPLES / n_workers)
     train_samples = []
-    # wandb.init(project="Training_SecurityAndSurveillance",name="Sequential Rollout")
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
 
@@ -192,5 +188,4 @@ if __name__ == '__main__':
     print(f'Generated samples in {(t2 - t1) / 60.:.2f} min.')
     print(f'Trained in {(t3 - t2) / 60.:.2f} min.')
 
-    # wandb.finish()
     

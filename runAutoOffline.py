@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 import ma_gym  # register new envs on import
 import os
-from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4, AgentType, \
+from src.constants import SpiderAndFlyEnv, BaselineModelPath_10x10_4v3, AgentType, \
     QnetType
 from src.qnetwork_coordinated import QNetworkCoordinated
 from src.agent_seq_rollout import SeqRolloutAgent
@@ -37,7 +37,7 @@ BATCH_SIZE = 1024
 EPOCHS = 500
 N_SIMS_MC = 50
 FROM_SCRATCH = False
-INPUT_QNET_NAME = RepeatedRolloutModelPath_10x10_4v4
+INPUT_QNET_NAME = BaselineModelPath_10x10_4v3
 BASIS_POLICY_AGENT = AgentType.QNET_BASED
 QNET_TYPE = QnetType.BASELINE
 BASIS_AGENT_TYPE = AgentType.RULE_BASED
@@ -87,9 +87,7 @@ def getBasePolicy(obs,agent):
 
 
 N_SIMS = 10
-EPOCHS = 10
-
-
+EPOCHS = 300
 
 
 # Function to log data with buffering
@@ -109,9 +107,7 @@ def main(wandbLog,modelFileName):
 
     steps_num = 0
     if wandbLog:
-        wandb.init(project="smartFlies",name="Auto_RegA4_P2")
-        log_buffer = []
-        log_interval = 50
+        wandb.init(project="smartFlies",name="Auto_BaseWeakA4_P2")
 
     _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -217,19 +213,13 @@ def main(wandbLog,modelFileName):
         print(f'Episode {epi}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
 
         if wandbLog:
-            buffered_log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime}, 
-                         epi, log_buffer, log_interval)
+            wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
 
 
-        if (epi+1) % 1000 ==0:
+        if (epi+1) % 100 ==0:
             wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=10,format="mp4")})
 
     if wandbLog:
-        if log_buffer:
-            for item in log_buffer:
-                wandb.log(item[0], step=item[1], commit=False)
-            wandb.log({}, commit=True)
-            log_buffer.clear()
         wandb.finish()
         
     env.close()
@@ -241,7 +231,7 @@ def main(wandbLog,modelFileName):
 
 
 if __name__ == '__main__':
-    main(wandbLog=True,modelFileName = RepeatedRolloutModelPath_10x10_4v4)
+    main(wandbLog=True,modelFileName = BaselineModelPath_10x10_4v3)
 
    
 
