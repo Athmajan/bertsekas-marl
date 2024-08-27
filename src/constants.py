@@ -6,6 +6,9 @@ RepeatedRolloutModelPath_10x10_4v2 = 'artifacts/repeated_rollout_policy_10x10_4v
 RepeatedRolloutModelPath_10x10_4v3 = 'artifacts/repeated_rollout_policy_10x10_4v3.pt'
 RepeatedRolloutModelPath_10x10_4v4 = 'artifacts/repeated_rollout_policy_10x10_4v4.pt copy'
 smartPreys = 'artifacts/repeated_rollout_policy_10x10_4v4.pt'
+horizontalAgents = 'artifacts/horizontal_10x10_4v4.pt'
+
+basePolicySmartPreys = 'artifacts/baseSmartPreys.pt'
 
 class AgentType:
     RANDOM = 'Random'

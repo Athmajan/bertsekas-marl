@@ -118,10 +118,10 @@ def OHE_AgentID(env,last_obs_grid,agent):
 
 
 
-EPOCHS = 200
+EPOCHS = 100
 BATCH_SIZE = 1000
-OUTPUT_QNET_NAME =  'artifacts/basePolicy_50x50_4A_10_RandP.pt'
-N_SAMPLES = 50000
+OUTPUT_QNET_NAME =  'artifacts/basePolicy_50x50_4A_2_RandP.pt'
+N_SAMPLES = 10000
 
 def generate_sample(n_samples):
     env = gym.make(SpiderAndFlyEnv)
@@ -145,6 +145,7 @@ def generate_sample(n_samples):
                     min_max_normalized_q_values = (action_q_values - min_val) / (max_val - min_val)
                 except:
                     min_max_normalized_q_values = action_q_values/max_val
+
 
                 act_n.append(action_id)
                 # resettting OHE
@@ -263,7 +264,7 @@ if __name__ == '__main__':
             samples_part = f.result()
             train_samples += samples_part
 
-
+    # train_samples = generate_sample(N_SAMPLES)
     net = train_qnetwork(train_samples)
     torch.save(net.state_dict(), OUTPUT_QNET_NAME)
 

@@ -23,6 +23,8 @@ class RuleBasedAgent(Agent):
 
         # keep env to access specific method
         self._model = gym.make(SpiderAndFlyEnv)
+        self._model.grid_shape = grid_shape
+        self._model._grid_shape = grid_shape
         assert self._model.grid_shape == grid_shape
 
     def act(
@@ -30,7 +32,10 @@ class RuleBasedAgent(Agent):
             obs: List[float],
             **kwargs,
     ) -> int:
+    
         best_action, action_distances = self.act_with_info(obs)
+      
+
         return best_action
 
     def act_with_info(
@@ -40,8 +45,6 @@ class RuleBasedAgent(Agent):
         curr_pos = self._get_agent_pos(obs)
         alive_prey_coords = self._get_alive_prey_coords(obs)
         action_distances = self._get_action_distances(curr_pos, alive_prey_coords)
-        #print("printing action dists")
-        #print(action_distances)
 
         return action_distances.argmin(), action_distances
 
@@ -65,6 +68,52 @@ class RuleBasedAgent(Agent):
                 action_distances[action_id] = min_d
 
         return action_distances
+    
+
+
+    def act_with_info_grid(
+            self,
+            last_obs_grid,
+    ) -> Tuple[int, np.ndarray]:
+        
+        currentPos_x = np.nonzero(last_obs_grid[2])[0].item()
+        currentPos_y = np.nonzero(last_obs_grid[2])[1].item()
+
+        preyAive_x = np.nonzero(last_obs_grid[3])[0]
+        preyAive_y = np.nonzero(last_obs_grid[3])[1]
+
+        curr_pos = tuple([currentPos_x,currentPos_y]) 
+        alive_prey_coords = []
+        for i in range(len(preyAive_x)):
+            alive_prey_coords.append(tuple([preyAive_x[i],preyAive_y[i]]))
+
+        action_distances = self._get_action_distances(curr_pos, alive_prey_coords)
+
+        return action_distances.argmin(), action_distances
+
+    def _get_action_distances(
+            self,
+            curr_pos: Tuple[int, int],
+            alive_prey_coords: List[Tuple[float, float]],
+    ) -> np.ndarray:
+        n_actions = self._action_space.n
+
+        action_distances = np.full((n_actions,), fill_value=100, dtype=np.float32)
+        for action_id in range(n_actions):
+            next_pos = self._model.apply_action(curr_pos, action_id)
+            if next_pos is not None:
+                min_d = np.inf
+                for alive_prey_row, alive_prey_col in alive_prey_coords:
+                    d = np.abs(next_pos[0] - alive_prey_row) + np.abs(next_pos[1] - alive_prey_col)
+                    if d < min_d:
+                        min_d = d
+
+                action_distances[action_id] = min_d
+
+        return action_distances
+    
+
+
 
     def _convert_to_pos(
             self,

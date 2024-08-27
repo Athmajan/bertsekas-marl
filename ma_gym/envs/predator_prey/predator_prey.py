@@ -13,7 +13,75 @@ from ..utils.observation_space import MultiAgentObservationSpace
 from ..utils.draw import draw_grid, fill_cell, draw_circle, write_cell_text
 
 logger = logging.getLogger(__name__)
+import heapq
 
+GRID_SIZE = 50
+ACTIONS = [(1, 0), (0, -1), (-1, 0), (0, 1), (0, 0)]
+
+def heuristic(a, b):
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+def get_neighbors(pos):
+    neighbors = []
+    for action in ACTIONS:
+        next_pos = (pos[0] + action[0], pos[1] + action[1])
+        if 0 <= next_pos[0] < GRID_SIZE and 0 <= next_pos[1] < GRID_SIZE:
+            neighbors.append(next_pos)
+    return neighbors
+
+def a_star_search(start, predators):
+    open_set = []
+    heapq.heappush(open_set, (0, start))
+    came_from = {}
+    g_score = {start: 0}
+    f_score = {start: min(heuristic(start, pred) for pred in predators)}
+    
+    while open_set:
+        _, current = heapq.heappop(open_set)
+        
+        if current in predators:
+            continue  # Skip if the position is a predator
+        
+        neighbors = get_neighbors(current)
+        
+        for neighbor in neighbors:
+            tentative_g_score = g_score[current] + 1  # Assume cost of moving is 1
+            if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                came_from[neighbor] = current
+                g_score[neighbor] = tentative_g_score
+                f_score[neighbor] = tentative_g_score + min(heuristic(neighbor, pred) for pred in predators)
+                heapq.heappush(open_set, (f_score[neighbor], neighbor))
+                
+    return reconstruct_path(came_from, start)
+
+def reconstruct_path(came_from, start):
+    current = start
+    path = []
+    while current in came_from:
+        path.append(current)
+        current = came_from[current]
+    path.reverse()
+    return path
+
+def find_safest_move(prey_pos, predators):
+    path = a_star_search(prey_pos, predators)
+    if len(path) > 1:
+        next_move = path[1]
+        dx = next_move[0] - prey_pos[0]
+        dy = next_move[1] - prey_pos[1]
+        action = ACTIONS.index((dx, dy))
+    else:
+        action = 4  # No-op if no safe path found
+    return action
+
+
+def scan_grid(next_pos, grid_size):
+        positions_to_scan = []
+        for dx in range(-grid_size, grid_size + 1):
+            for dy in range(-grid_size, grid_size + 1):
+                if dx != 0 or dy != 0:  # Exclude the center position
+                    positions_to_scan.append([next_pos[0] + dx, next_pos[1] + dy])
+        return positions_to_scan
 
 class PredatorPrey(gym.Env):
     """
@@ -33,19 +101,21 @@ class PredatorPrey(gym.Env):
 
     def __init__(
             self,
-            grid_shape=(10, 10),
-            n_agents=4,
-            n_preys=10,
-            prey_move_probs=(0.2, 0.2, 0.2, 0.2, 0.2),
-            # penalty=1,  # initially -0.5; here we assume no penalty for catching the prey solo
+            grid_shape=(50, 50), 
+            n_agents=4, 
+            n_preys=2,
+            prey_move_probs=(0.1, 0.1, 0.1, 0.1, 0.6), 
             step_cost=-1,
-            prey_capture_reward=0,
-            max_steps=200):
+            prey_capture_reward=0, 
+            max_steps=5000, 
+            smartPrey=False):
+        
+
         self._grid_shape = grid_shape
         self.grid_shape = grid_shape
         self.n_agents = n_agents
         self.n_preys = n_preys
-        self._max_steps = max_steps
+        self.max_steps = max_steps
         self._step_count = None
         self._substep_count = 0
         # self._penalty = penalty
@@ -62,6 +132,7 @@ class PredatorPrey(gym.Env):
 
         self._agent_dones = [False for _ in range(self.n_agents)]
         self._prey_move_probs = prey_move_probs
+        self.prey_move_probs = prey_move_probs
         self.viewer = None
 
         # Returns relative position -> positions of all agents & prey
@@ -72,6 +143,8 @@ class PredatorPrey(gym.Env):
 
         self._total_episode_reward = None
         self.seed()
+
+        self.smartPrey = smartPrey
 
     def get_action_meanings(self, agent_i=None):
         if agent_i is not None:
@@ -183,9 +256,9 @@ class PredatorPrey(gym.Env):
         return self.get_agent_obs()
 
     def reset_from(self, obs):
-        assert self.n_preys == 2
-        assert self.n_agents == 4
-        assert self._grid_shape == (10, 10)
+        # assert self.n_preys == 2
+        # assert self.n_agents == 4
+        # assert self._grid_shape == (10, 10)
 
         self._total_episode_reward = [0 for _ in range(self.n_agents)]
         self.agent_pos = {}
@@ -214,6 +287,52 @@ class PredatorPrey(gym.Env):
         self._prey_alive = [bool(prey_alive) for prey_alive in preys_alive]
 
         return self.get_agent_obs()
+    
+    def convert_to_flat_obs(self):
+        prey_alive_status = self._prey_alive
+        agent_pos = self.agent_pos
+        prey_pos = self.prey_pos
+        gridSize = self.grid_shape
+
+
+        # create empty array with the grid size
+        grid_agent_dones = np.zeros([gridSize[0],gridSize[1]],dtype=np.float32)
+        grid_agent_pos = np.zeros([gridSize[0],gridSize[1]],dtype=np.float32)
+        grid_agent_pos_wID = np.zeros([gridSize[0],gridSize[1]],dtype=np.float32)
+
+        # create grid array with agent positions
+        # mark 1 if any agent is present 
+        for agentID in range(self.n_agents):
+            agentLoc = agent_pos[agentID]
+            agentLoc_x = agentLoc[0]
+            agentLoc_y = agentLoc[1]
+
+            grid_agent_pos[agentLoc_x,agentLoc_y] = 1
+            
+            # grid_agent_pos_wID[agentLoc_x,agentLoc_y] = agentID+1 # adding one to distinguish between default 0
+
+
+            agentDone = self._agent_dones[agentID]
+            if agentDone:
+                grid_agent_dones[agentLoc_x,agentLoc_y] = 1
+
+        # create empty array with the grid size
+        grid_prey_alive = np.zeros([gridSize[0],gridSize[1]],dtype=np.float32)
+
+        for preyID in range(self.n_preys):
+            preyLoc = prey_pos[preyID]
+            preyLoc_x = preyLoc[0]
+            preyLoc_y = preyLoc[1]
+
+            preyAlive = prey_alive_status[preyID]
+            if preyAlive:
+                grid_prey_alive[preyLoc_x,preyLoc_y] = 1
+
+
+        grid_stack = np.stack((grid_agent_dones, grid_agent_pos, grid_agent_pos_wID,grid_prey_alive), axis=0)
+
+
+        return grid_stack
 
     def _convert_to_pos(
             self,
@@ -335,6 +454,10 @@ class PredatorPrey(gym.Env):
         return _count, agent_id
     
 
+
+    
+    
+
     def step(self, agents_action):
         assert (self._step_count is not None), \
             "Call reset before using step method."
@@ -357,45 +480,19 @@ class PredatorPrey(gym.Env):
 
         for prey_i in range(self.n_preys):
             if self._prey_alive[prey_i]:
-                
-                # number of simulations 
-                prey_move_sim_n = 100
-                moveDict_Init = {0:0, 1:0, 2:0, 3:0, 4:0}
-                moveDict = moveDict_Init
-                for _ in range(prey_move_sim_n):
-                    _move = self.np_random.choice(len(self._prey_move_probs), 1, p=self._prey_move_probs)[0]
-                    # scan 2x2 grid around itself and count how many agents are present
-                    nextPosPrey = self.__next_pos(self.prey_pos[prey_i], _move)
-                    
-                    positionsToScan = [
-                        [nextPosPrey[0], nextPosPrey[1]],        # next position
-                        [nextPosPrey[0], nextPosPrey[1]-1],      # south of next position
-                        [nextPosPrey[0]-1, nextPosPrey[1]-1],    # south west of next position
-                        [nextPosPrey[0]-1, nextPosPrey[1]],      # west of next position
-                        [nextPosPrey[0]-1, nextPosPrey[1]+1],    # north west of next position
-                        [nextPosPrey[0], nextPosPrey[1]+1],      # north of next position
-                        [nextPosPrey[0]+1, nextPosPrey[1]+1],    # north east of next position
-                        [nextPosPrey[0]+1, nextPosPrey[1]],      # east of next position
-                        [nextPosPrey[0]+1, nextPosPrey[1]-1],    # south east of next position    
-                    ]
 
-                    for scanLocations in positionsToScan:
-                        for agentID in range(self.n_agents):
-                            if scanLocations == self.agent_pos[agentID]:
-                                moveDict[_move] += 1
+                if self.smartPrey :
+                    predator_positions = []
+                    for value in self.agent_pos.values():
+                        predator_positions.append(value)
 
 
-                if moveDict_Init == moveDict:
-                    # There has been no agents detected in the next possible moves 
-                    # could mean agents are far away from the field of vision of the prey
-                    # at this condition the prey will chose a random aciton based on the prob distn.
-                    prey_move = _move = self.np_random.choice(len(self._prey_move_probs),1, p=self._prey_move_probs)[0]
+                    prey_move = find_safest_move(tuple(self.prey_pos[prey_i]), predator_positions)
+
                 else:
-                    # Agents have been detected in one or more next possible moves.
-                    # The prey will decide the next good action based on the simulation results
-                    prey_move = min(moveDict, key=moveDict.get)
-                     
-                self.__update_prey_pos(prey_i, prey_move)
+                    prey_move = self.np_random.choice(len(self._prey_move_probs),1, p=self._prey_move_probs)[0]
+
+                self.__update_prey_pos(prey_i,prey_move )
 
                 # recalculate alive status + add reward if caught
                 prey_j_pos = self.prey_pos[prey_i]
@@ -406,7 +503,9 @@ class PredatorPrey(gym.Env):
                             self._prey_alive[prey_i] = False
                             rewards[agent_i] += self._prey_capture_reward
 
-        if (self._step_count >= self._max_steps) or (True not in self._prey_alive):
+
+
+        if (self._step_count >= self.max_steps) or (True not in self._prey_alive):
             for i in range(self.n_agents):
                 self._agent_dones[i] = True
 
@@ -448,7 +547,7 @@ class PredatorPrey(gym.Env):
                                 self._prey_alive[prey_i] = False
                                 rewards[agent_i] += self._prey_capture_reward
 
-            if (self._step_count >= self._max_steps) or (True not in self._prey_alive):
+            if (self._step_count >= self.max_steps) or (True not in self._prey_alive):
                 for i in range(self.n_agents):
                     self._agent_dones[i] = True
 
