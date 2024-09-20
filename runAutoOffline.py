@@ -1,6 +1,7 @@
 from time import perf_counter
 from concurrent.futures import ThreadPoolExecutor,ProcessPoolExecutor, as_completed
 from typing import List, Dict, Tuple
+import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 import numpy as np
@@ -10,7 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 import ma_gym  # register new envs on import
 
-from src.constants import SpiderAndFlyEnv, RepeatedRolloutModelPath_10x10_4v4, AgentType, \
+from src.constants import SpiderAndFlyEnv, deter_5050Prey,deter_5050Prey_Cross_13,deter_5050Prey_agent_0,deter_5050Prey_agent_1, AgentType, \
     QnetType
 from src.qnetwork_coordinated import QNetworkCoordinated
 from src.agent_seq_rollout import SeqRolloutAgent
@@ -20,7 +21,7 @@ import time
 import wandb
 from src.agent import Agent
 
-
+import cv2
 import warnings
 
 # Suppress the specific gym warning
@@ -29,17 +30,44 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 SEED = 42
 
-M_AGENTS = 4
+M_AGENTS = 2
 P_PREY = 2
 
-N_SAMPLES = 50_000
+N_SAMPLES = 50000
 BATCH_SIZE = 1024
-EPOCHS = 500
-N_SIMS_MC = 50
-FROM_SCRATCH = False
-INPUT_QNET_NAME = RepeatedRolloutModelPath_10x10_4v4
-BASIS_POLICY_AGENT = AgentType.QNET_BASED
+EPOCHS = 30
+N_SIMS = 50
+FROM_SCRATCH = True
+INPUT_QNET_NAME = deter_5050Prey
+OUTPUT_QNET_NAME = deter_5050Prey
+BASIS_POLICY_AGENT = AgentType.RULE_BASED
 QNET_TYPE = QnetType.BASELINE
+
+
+def visualize_image(img: np.ndarray, pause_time: float = 0.5):
+
+    if not isinstance(img, np.ndarray):
+        raise ValueError("The provided image is not a valid NumPy array")
+
+    plt.imshow(img)
+    plt.axis('off') 
+    plt.show(block=False) 
+    plt.pause(pause_time)  
+    plt.close() 
+
+
+def create_movie_clip(frames: list, output_file: str, fps: int = 10):
+    # Assuming all frames have the same shape
+    height, width, layers = frames[0].shape
+    size = (width, height)
+    
+    out = cv2.VideoWriter(output_file, cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+    
+    for frame in frames:
+        out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    
+    out.release()
+
 
 def convert_to_x(obs, m_agents, agent_id, action_space, prev_actions):
     # state
@@ -63,6 +91,18 @@ def convert_to_x(obs, m_agents, agent_id, action_space, prev_actions):
 
 
 def getSignallingPolicy(net,obs,m_agents,agent_i,prev_actions,action_space):
+    net_dict = {
+        0:deter_5050Prey_agent_0,
+        1:deter_5050Prey_agent_1,
+    }
+
+    net.load_state_dict(torch.load(net_dict[agent_i]))
+    net.to(device)
+    net.eval()
+
+
+
+
     agent_ohe = np.zeros(shape=(m_agents,), dtype=np.float32)
     agent_ohe[agent_i] = 1.
     prev_actions_ohe = np.zeros(shape=(m_agents * action_space.n,), dtype=np.float32)
@@ -181,26 +221,82 @@ def actwithinfo(
     np_sim_results_sorted = np_sim_results[np.argsort(np_sim_results[:, 0])]
     action_q_values = np_sim_results_sorted[:, 1]
     best_action = np.argmax(action_q_values)
-    return best_action
+    return best_action, action_q_values
 
 
 
-N_SIMS = 10
-EPOCHS = 30
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+
+
+def add_title_to_frame1(frame, logDict):
+    
+    img = Image.fromarray(frame)
+    layer = Image.new('RGB', (max(img.size),int(max(img.size)*1.5)), (255,255,255))
+    layer.paste(img)
+    font = ImageFont.truetype("arial.ttf", 15)
+    draw = ImageDraw.Draw(layer)
+
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)),f"E: {logDict['E']}  S: {logDict['S']}",(0,0,0),font=font)
+    draw.text((int(round(max(img.size)*0.05)), int(max(img.size))+15),f"Agent_1 : {logDict['a_0']} __________ : {logDict['aQ_0']}",(0,0,0),font=font)
+    draw.text((int(round(max(img.size)*0.05)), int(max(img.size))+30),f"Agent_2 : {logDict['a_1']} __________ : {logDict['aQ_1']}",(0,0,0),font=font)
+
+    # Convert the new image back to a NumPy array
+    frame_with_title = np.asarray(layer)
+    
+    return frame_with_title
+
+
+
+def add_title_to_frame(frame, logDict):
+    
+    ''' 
+    logDict = {
+                "Agent1_QVals" : all_action_q_values[0].to_list(),
+                "Agent2_QVals" : all_action_q_values[1].to_list(),
+                "SignalingPolicy" : act_n_signalling,
+                "BasePolicy" : act_n_base2,
+                "Actions Taken" : act_auto_n,
+                "E" : epi,
+                "S" : epi_steps,
+            }
+    '''
+    
+    img = Image.fromarray(frame)
+    layer = Image.new('RGB', (max(img.size),int(max(img.size)*1.5)), (255,255,255))
+    layer.paste(img)
+    font = ImageFont.truetype("arial.ttf", 10)
+    draw = ImageDraw.Draw(layer)
+
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)),f"E: {logDict['E']}  S: {logDict['S']}",(0,0,0),font=font)
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)+15),f"Agent_1 : {logDict['Agent1_QVals']}",(0,0,0),font=font)
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)+30),f"Agent_2 : {logDict['Agent2_QVals']}",(0,0,0),font=font) 
+
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)+45),f"BasePolicy : {logDict['BasePolicy']}",(0,0,0),font=font) 
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)+60),f"SignalingPolicy : {logDict['SignalingPolicy']}",(0,0,0),font=font) 
+    draw.text((int(round(max(img.size)*0.05)), max(img.size)+75),f"Actions : {logDict['Actions Taken']}",(0,0,0),font=font) 
+
+
+    # Convert the new image back to a NumPy array
+    frame_with_title = np.asarray(layer)
+    
+    return frame_with_title
+
+
+
 
 if __name__ == '__main__':
     steps_history = []
     steps_num = 0
-    wandb.init(project="SecurityAndSurveillance",name="AutoRollout_Off")
+    # wandb.init(project="Deter_Flies",name="5050_Deter_On_Random")
     
     _n_workers = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = QNetworkCoordinated(M_AGENTS, P_PREY, 5)
-    net.load_state_dict(torch.load(INPUT_QNET_NAME))
-    net.to(device)
-    net.eval()
+    
 
     env = gym.make(SpiderAndFlyEnv)
+    
 
     for epi in range(EPOCHS):
         # get episode start time
@@ -215,11 +311,21 @@ if __name__ == '__main__':
 
 
         obs_n = env.reset()
-        frames.append(env.render())
+        logDict = {
+                "Agent1_QVals" : "",
+                "Agent2_QVals" : "",
+                "SignalingPolicy" : "",
+                "BasePolicy" : "",
+                "Actions Taken" : "",
+                "E" : epi,
+                "S" : epi_steps,
+            }
+        
+        frames.append(add_title_to_frame(env.render(), logDict))
 
         m_agents = env.n_agents
         p_preys = env.n_preys
-        grid_shape = env._grid_shape
+        grid_shape = env.grid_shape
         action_space = env.action_space[0]
 
         done_n = [False] * m_agents
@@ -241,6 +347,7 @@ if __name__ == '__main__':
             # print(act_n_signalling)
 
 
+
             # Query base policy from base policy (Rule Based)
             agents = [RuleBasedAgent(i, m_agents, p_preys, grid_shape, env.action_space[i]) for i in range(m_agents)]
 
@@ -253,6 +360,7 @@ if __name__ == '__main__':
                 for future in as_completed(futures):
                     act_n_base.append(future.result())
 
+
             # print(act_n_base)
             act_n_base2 = []
             for agent in range(m_agents):
@@ -262,7 +370,11 @@ if __name__ == '__main__':
                         break
 
 
+
+
+
             act_auto_n = []
+            all_action_q_values = []
             with ProcessPoolExecutor(max_workers=_n_workers) as executor_outer:
                 outer_futures = []
                 for i, (agent, obs) in enumerate(zip(agents, obs_n)):
@@ -280,28 +392,46 @@ if __name__ == '__main__':
                                         act_n_base2,
                                         ))
                     
+                
+                    
                 for future in as_completed(outer_futures):
-                    best_action = future.result()
+                    best_action, action_q_values = future.result()
                     act_auto_n.append(best_action)
+                    all_action_q_values.append(action_q_values)
 
             # print(act_auto_n)
 
+
+            logDict = {
+                "Agent1_QVals" : all_action_q_values[0].tolist(),
+                "Agent2_QVals" : all_action_q_values[1].tolist(),
+                "SignalingPolicy" : act_n_signalling,
+                "BasePolicy" : act_n_base2,
+                "Actions Taken" : act_auto_n,
+                "E" : epi,
+                "S" : epi_steps,
+            }
+            
 
             obs_n, reward_n, done_n, info = env.step(act_auto_n)
             epi_steps += 1
             steps_num += 1
             total_reward += np.sum(reward_n)
-            frames.append(env.render())
+            frames.append(add_title_to_frame(env.render(), logDict))
+            visualize_image(add_title_to_frame(env.render(), logDict))
+
+
         # end of an episode. capture time    
         endTime = time.time()
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
+        # wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=epi) 
         steps_history.append(epi_steps)
+        create_movie_clip(frames,f"Mode11Trained_on_Mode11_{epi}_V2.mp4")
 
-        if (epi+1) % 10 ==0:
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+        # if (epi+1) % 10 ==0:
+        #     wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
 
 
-    wandb.finish()
+    # wandb.finish()
     env.close()
 
 

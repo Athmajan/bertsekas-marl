@@ -9,7 +9,34 @@ from src.constants import SpiderAndFlyEnv, AgentType
 from src.agent_rule_based import RuleBasedAgent
 from src.agent_qnet_based import QnetBasedAgent
 from src.agent import Agent
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
+import matplotlib.pyplot as plt
+import cv2
+
+def visualize_image(img: np.ndarray, pause_time: float = 0.5):
+
+    if not isinstance(img, np.ndarray):
+        raise ValueError("The provided image is not a valid NumPy array")
+
+    plt.imshow(img)
+    plt.axis('off') 
+    plt.show(block=False) 
+    plt.pause(pause_time)  
+    plt.close() 
+
+def create_movie_clip(frames: list, output_file: str, fps: int = 10):
+    # Assuming all frames have the same shape
+    height, width, layers = frames[0].shape
+    size = (width, height)
+    
+    out = cv2.VideoWriter(output_file, cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+    
+    for frame in frames:
+        out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+    
+    out.release()
 
 class SeqRolloutAgent(Agent):
     def __init__(
@@ -19,10 +46,10 @@ class SeqRolloutAgent(Agent):
             p_preys: int,
             grid_shape: Tuple[int, int],
             action_space: gym.spaces.Discrete,
-            n_sim_per_step: int = 10,
+            n_sim_per_step: int,
             basis_agent_type: str = AgentType.RULE_BASED,
             qnet_type: str = None,
-            n_workers: int = 12,
+            n_workers: int = 10,
     ):
         self.id = agent_id
         self._m_agents = m_agents
@@ -40,7 +67,7 @@ class SeqRolloutAgent(Agent):
             **kwargs,
     ) -> int:
         best_action, action_q_values = self.act_with_info(obs, prev_actions)
-        return best_action
+        return best_action, action_q_values
 
     def act_with_info1(
             ## with pralallel processing
@@ -70,10 +97,7 @@ class SeqRolloutAgent(Agent):
                     self._m_agents,
                     self._agents,
                 ))
-            print(futures)
             for f in as_completed(futures):
-                print("printing f")
-                print(f)
                 res = f.result()
                 sim_results.append(res)
 
@@ -113,9 +137,11 @@ class SeqRolloutAgent(Agent):
 
         # analyze results of the simulation
         np_sim_results = np.array(sim_results, dtype=np.float32)
-        np_sim_results_sorted = np_sim_results[np.argsort(np_sim_results[:, 0])]
-        action_q_values = np_sim_results_sorted[:, 1]
-        best_action = np.argmax(action_q_values)
+        # np_sim_results_sorted = np_sim_results[np.argsort(np_sim_results[:, 0])]
+        action_q_values = np_sim_results[:, 1]
+        max_value = np.max(action_q_values)
+        max_indices = np.flatnonzero(action_q_values == max_value)
+        best_action = np.random.choice(max_indices)
 
         return best_action, action_q_values
 
@@ -152,8 +178,8 @@ class SeqRolloutAgent(Agent):
         # run N simulations
 
         # create env
-        env = gym.make(SpiderAndFlyEnv)
-
+        env_simulator = gym.make(SpiderAndFlyEnv)
+        
         # roll first step
         first_step_prev_actions = dict(prev_actions)
         first_act_n = np.empty((m_agents,), dtype=np.int8)
@@ -172,19 +198,26 @@ class SeqRolloutAgent(Agent):
                 # assume action based on base policy
                 underlying_agent = agents[i]
                 assumed_action = underlying_agent.act(obs, prev_actions=first_step_prev_actions)
+                
+                # this is where i need the next break point
                 first_act_n[i] = assumed_action
                 first_step_prev_actions[i] = assumed_action
 
+
+
+        # simulationFrames = []
         # run N simulations
         avg_total_reward = 0.
-
         for j in range(n_sims):
+            
             # init env from observation
-            env.reset()
-            sim_obs_n = env.reset_from(obs)
+            env_simulator.reset()
+            sim_obs_n = env_simulator.reset_from(obs)
+            # simulationFrames.append(env_simulator.render())
 
             # make prescribed first step
-            sim_obs_n, sim_reward_n, sim_done_n, sim_info = env.step(first_act_n)
+            sim_obs_n, sim_reward_n, sim_done_n, sim_info = env_simulator.step(first_act_n)
+            # simulationFrames.append(env_simulator.render())
             avg_total_reward += np.sum(sim_reward_n)
 
             # run simulation
@@ -195,13 +228,16 @@ class SeqRolloutAgent(Agent):
                     sim_best_action = agent.act(sim_obs, prev_actions=sim_prev_actions)
                     sim_act_n.append(sim_best_action)
                     sim_prev_actions[agent.id] = sim_best_action
-
-                sim_obs_n, sim_reward_n, sim_done_n, sim_info = env.step(sim_act_n)
+                sim_obs_n, sim_reward_n, sim_done_n, sim_info = env_simulator.step(sim_act_n)
+                # simulationFrames.append(env_simulator.render())
                 avg_total_reward += np.sum(sim_reward_n)
 
-        env.close()
+        env_simulator.close()
 
         avg_total_reward /= len(agents)
         avg_total_reward /= n_sims
+
+
+        # create_movie_clip(simulationFrames, f"SimulationFrames_{action_id}_{agent_id}V2.mp4", fps=10)
 
         return action_id, avg_total_reward

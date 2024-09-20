@@ -11,6 +11,15 @@ from src.agent import MultiAgent
 from src.constants import SpiderAndFlyEnv
 from src.agent_rule_based import RuleBasedAgent
 
+from gym.envs.registration import register
+
+register(
+    id='PredatorPrey10x10-v4',
+    entry_point='ma_gym.envs.predator_prey.predator_prey:PredatorPrey',
+    max_episode_steps=1000,
+    reward_threshold=1.0,
+)
+
 
 class StdRolloutMultiAgent(MultiAgent):
     def __init__(

@@ -19,6 +19,7 @@ N_SIMS_PER_MC = 50
 
 from gym.envs.registration import register
 import warnings
+import json
 
 # Suppress the specific gym warning
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -59,67 +60,76 @@ def visualize_image(img: np.ndarray, pause_time: float = 0.5):
     plt.pause(pause_time)  
     plt.close() 
 
+Number_of_experiments = 1
+episodes_per_experiments =50
 
 if __name__ == '__main__':
-    np.random.seed(42)
-    
-    wandb.init(project="SecurityAndSurveillance",name="Standard Rollout")
-    # create Spider-and-Fly game
-    env = gym.make(SpiderAndFlyEnv)
-    env.seed(42)
-    # env = Monitor(env, directory='../artifacts/recordings', force=True, )
-    steps_num = 0
-    for i_episode in tqdm(range(N_EPISODES)):
-        startTime = time.time()
-        frames = []
-        epi_steps = 0
-        # init env
-        # obs_n = env.reset()
-        obs_n = env.reset()
-        obs_n = env.reset_default()
-        env.render()
+    results_experiment = {}
+    for experi in range(Number_of_experiments):
 
-        # init env variables
-        m_agents = env.env.n_agents
-        p_preys = env.env.n_preys
-        grid_shape = env.env._grid_shape
 
-        # init agents
-        std_rollout_multiagent = StdRolloutMultiAgent(
-            m_agents, p_preys, grid_shape, env.action_space[0], N_SIMS_PER_MC)
+        # create Spider-and-Fly game
+        env = gym.make(SpiderAndFlyEnv)
+        
+        steps_history = []
+        # env = Monitor(env, directory='../artifacts/recordings', force=True, )
+        steps_num = 0
+        for i_episode in tqdm(range(episodes_per_experiments)):
+            startTime = time.time()
+            frames = []
+            epi_steps = 0
+            # init env
+            # obs_n = env.reset()
+            obs_n = env.reset()
 
-        # init stopping condition
-        done_n = [False] * env.n_agents
 
-        total_reward = .0
+            # init env variables
+            m_agents = env.env.n_agents
+            p_preys = env.env.n_preys
+            grid_shape = env.env._grid_shape
 
-        # run an episode until all prey is caught
-        while not all(done_n):
-            act_n = std_rollout_multiagent.act_n(obs_n)
+            # init agents
+            std_rollout_multiagent = StdRolloutMultiAgent(
+                m_agents, p_preys, grid_shape, env.action_space[0], N_SIMS_PER_MC)
 
-            # update step
-            obs_n, reward_n, done_n, info = env.step(act_n)
-            epi_steps += 1
-            steps_num += 1
+            # init stopping condition
+            done_n = [False] * env.n_agents
 
-            total_reward += np.sum(reward_n)
-            # visualize_image(imgs)
-            frames.append(env.render())
+            total_reward = .0
 
-            # time.sleep(0.5)
-            env.render()
+            # run an episode until all prey is caught
+            while not all(done_n):
+                act_n = std_rollout_multiagent.act_n(obs_n)
 
-        endTime = time.time()
-        # print(f'Episode {i_episode}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
-        wandb.log({'Reward':total_reward, 'episode_steps' : epi_steps,'exeTime':endTime-startTime},step=i_episode) 
-        # create_movie_clip(frames, 'standardMARollout.mp4', fps=10)
+                # update step
+                obs_n, reward_n, done_n, info = env.step(act_n)
+                epi_steps += 1
+                steps_num += 1
 
-        if (i_episode+1) % 10 ==0:
-            print("Checpoint passed")
-            # axes are (time, channel, height, width)
-            # create_movie_clip(frames, f"ManhattanRuleBased_2_agents_{epi+1}.mp4", fps=10)
-            wandb.log({"video": wandb.Video(np.stack(frames,0).transpose(0,3,1,2), fps=20,format="mp4")})
+                total_reward += np.sum(reward_n)
+                # visualize_image(imgs)
+                frames.append(env.render())
 
-    # time.sleep(2.)
+                # time.sleep(0.5)
 
-    env.close()
+            endTime = time.time()
+            print(f'Episode {i_episode}: Reward is {total_reward}, with steps {epi_steps} exeTime{endTime-startTime}')
+            resDict = {
+                    "StepsToSolve" : epi_steps,
+                    "compute_Time" : endTime-startTime,
+                }
+            steps_history.append(resDict)
+            # create_movie_clip(frames, 'standardMARollout.mp4', fps=10)
+
+            if (i_episode+1) % 10 ==0:
+                print("Checpoint passed")
+                # axes are (time, channel, height, width)
+                create_movie_clip(frames, f"standardRollout_2_agents_{i_episode+1}.mp4", fps=10)
+
+        # time.sleep(2.)
+
+        env.close()
+        results_experiment[experi] = steps_history
+
+    with open("results_experiment_standardRollout.json", "w") as json_file:
+        json.dump(results_experiment, json_file, indent=4)

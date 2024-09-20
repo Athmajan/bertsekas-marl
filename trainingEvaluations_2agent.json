@@ -1,0 +1,37 @@
+{
+    "0": [
+        {
+            "trainingEpoch": 0,
+            "StepsToSolve": 80,
+            "compute_Time": 28.82357907295227
+        }
+    ],
+    "10": [
+        {
+            "trainingEpoch": 10,
+            "StepsToSolve": 73,
+            "compute_Time": 31.406703233718872
+        }
+    ],
+    "20": [
+        {
+            "trainingEpoch": 20,
+            "StepsToSolve": 100,
+            "compute_Time": 29.46187114715576
+        }
+    ],
+    "30": [
+        {
+            "trainingEpoch": 30,
+            "StepsToSolve": 56,
+            "compute_Time": 21.950382709503174
+        }
+    ],
+    "40": [
+        {
+            "trainingEpoch": 40,
+            "StepsToSolve": 100,
+            "compute_Time": 35.790489196777344
+        }
+    ]
+}

@@ -12,7 +12,18 @@ from ..utils.action_space import MultiAgentActionSpace
 from ..utils.observation_space import MultiAgentObservationSpace
 from ..utils.draw import draw_grid, fill_cell, draw_circle, write_cell_text
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+
 logger = logging.getLogger(__name__)
+
+'''
+Modified env.
+Spiders always start from the top right most corner.
+One prey starts from bottom left and the other prey starts from top left.
+Both preys travel in opposite directions.
+'''
 
 
 class PredatorPrey(gym.Env):
@@ -32,14 +43,15 @@ class PredatorPrey(gym.Env):
 
     def __init__(
             self,
-            grid_shape=(10, 10),
-            n_agents=4,
+            grid_shape=(10, 10), 
+            n_agents=2,
             n_preys=2,
             prey_move_probs=(0.2, 0.2, 0.2, 0.2, 0.2),
             # penalty=1,  # initially -0.5; here we assume no penalty for catching the prey solo
             step_cost=-1,
             prey_capture_reward=0,
-            max_steps=200):
+            max_steps=100):
+        
         self._grid_shape = grid_shape
         self.grid_shape = grid_shape
         self.n_agents = n_agents
@@ -50,6 +62,7 @@ class PredatorPrey(gym.Env):
         # self._penalty = penalty
         self._step_cost = step_cost
         self._prey_capture_reward = prey_capture_reward
+        self.init_prey_pos = {0:[int(self.grid_shape[0]/2),int(self.grid_shape[0]/2)], 1:[int(self.grid_shape[0]/2),int(self.grid_shape[0]/2)]}
 
         self.action_space = MultiAgentActionSpace([spaces.Discrete(5) for _ in range(self.n_agents)])
         self.agent_pos = {_: None for _ in range(self.n_agents)}
@@ -88,6 +101,24 @@ class PredatorPrey(gym.Env):
         _grid = [[PRE_IDS['empty'] for _ in range(self._grid_shape[1])] for row in range(self._grid_shape[0])]
         return _grid
 
+    # def __init_positions(self):
+    #     init_prey_pos = {0:[int(self.grid_shape[0]/2),int(self.grid_shape[0]/2)], 1:[int(self.grid_shape[0]/2),int(self.grid_shape[0]/2)]}
+    #     init_agent_pos = {0:[0,self.grid_shape[0]-1], 1:[0,self.grid_shape[0]-1]}
+    #     for agent_i in range(self.n_agents):
+    #         self.agent_pos[agent_i] = init_agent_pos[agent_i]
+            
+    #         # while True:
+    #         #     pos = [self.np_random.randint(0, self._grid_shape[0] - 1),
+    #         #            self.np_random.randint(0, self._grid_shape[1] - 1)]
+    #         #     if self._is_cell_vacant(pos, agent_id=agent_i):
+    #         #         self.agent_pos[agent_i] = [0,49]
+    #         #         break
+
+    #     for prey_i in range(self.n_preys):
+    #         self.prey_pos[prey_i] = init_prey_pos[prey_i]
+
+    #     self.__draw_base_img()
+
     def __init_positions(self):
         for agent_i in range(self.n_agents):
             while True:
@@ -107,6 +138,7 @@ class PredatorPrey(gym.Env):
                     break
 
         self.__draw_base_img()
+
 
     def get_agent_obs(self):
         _obs = []
@@ -181,10 +213,6 @@ class PredatorPrey(gym.Env):
         return self.get_agent_obs()
 
     def reset_from(self, obs):
-        assert self.n_preys == 2
-        assert self.n_agents == 4
-        assert self._grid_shape == (10, 10)
-
         self._total_episode_reward = [0 for _ in range(self.n_agents)]
         self.agent_pos = {}
         self.prey_pos = {}
@@ -310,6 +338,7 @@ class PredatorPrey(gym.Env):
                 # print('pos not updated')
                 pass
 
+
     def step(self, agents_action):
         self._step_count += 1
 
@@ -343,6 +372,8 @@ class PredatorPrey(gym.Env):
             self._total_episode_reward[i] += rewards[i]
 
         return self.get_agent_obs(), rewards, self._agent_dones, {'prey_alive': self._prey_alive}
+
+
 
     def substep(self, agent_id, action):
         self._substep_count += 1

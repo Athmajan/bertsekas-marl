@@ -5,6 +5,18 @@ import ma_gym
 
 from src.constants import SpiderAndFlyEnv
 from src.agent import Agent
+from gym.envs.registration import register
+import warnings
+
+# Suppress the specific gym warning
+warnings.filterwarnings("ignore", category=UserWarning)
+
+register(
+    id='PredatorPrey10x10-v4',
+    entry_point='ma_gym.envs.predator_prey.predator_prey:PredatorPrey',
+    max_episode_steps=1000,
+    reward_threshold=1.0,
+)
 
 
 class RuleBasedAgent(Agent):
@@ -40,10 +52,12 @@ class RuleBasedAgent(Agent):
         curr_pos = self._get_agent_pos(obs)
         alive_prey_coords = self._get_alive_prey_coords(obs)
         action_distances = self._get_action_distances(curr_pos, alive_prey_coords)
-        #print("printing action dists")
-        #print(action_distances)
 
-        return action_distances.argmin(), action_distances
+        arrSortedActDist = np.array(action_distances, dtype=np.float32)
+        min_value = np.min(arrSortedActDist)
+        min_indices = np.flatnonzero(arrSortedActDist == min_value)
+        best_action = np.random.choice(min_indices)
+        return best_action, action_distances
 
     def _get_action_distances(
             self,
